@@ -1,0 +1,72 @@
+{
+  "batch_id": "dZvnAo7Mr1Bz",
+  "status": "finished",
+  "folder": {
+    "id": "1qGwpjmQIQO8rN1odas0njDSf72VRrTCa",
+    "url": "https://drive.google.com/drive/folders/1qGwpjmQIQO8rN1odas0njDSf72VRrTCa",
+    "name": "Sample folder"
+  },
+  "ocr_language": "eng",
+  "created_at": "2026-11-13T15:23:43.366233+00:00",
+  "finished_at": "2026-11-13T15:23:46.137448+00:00",
+  "summary": {
+    "pending": 0,
+    "processing": 0,
+    "done": 2,
+    "failed": 0,
+    "total": 2
+  },
+  "files": [
+    {
+      "id": "1wMgCWAsqlw0nXcMhCldTbwSznMdXUmBT",
+      "name": "Sample image",
+      "mime_type": "image/jpeg",
+      "kind": "image",
+      "size": null,
+      "status": "done",
+      "method": "ocr",
+      "ocr_language": "eng",
+      "pages": [
+        {
+          "page": 1,
+          "method": "ocr",
+          "chars": 46
+        }
+      ],
+      "char_count": 46,
+      "warnings": [],
+      "error": null,
+      "duration_ms": 1700,
+      "downloaded_bytes": 30798,
+      "text": "Google Drive\n\nKeep everything. Share anything."
+    },
+    {
+      "id": "1luXUuk33QPfIM08h0u9M_uqXM3uu8pNn",
+      "name": "Sample PDF",
+      "mime_type": "application/pdf",
+      "kind": "pdf",
+      "size": null,
+      "status": "done",
+      "method": "pdf-parser",
+      "ocr_language": null,
+      "pages": [
+        {
+          "page": 1,
+          "method": "pdf-parser",
+          "chars": 1957
+        },
+        {
+          "page": 2,
+          "method": "pdf-parser",
+          "chars": 2012
+        }
+      ],
+      "char_count": 3971,
+      "warnings": [],
+      "error": null,
+      "duration_ms": 2769,
+      "downloaded_bytes": 1280848,
+      "text": "Create and collaborate on documents, \r\nspreadsheets and presentations with Google Docs\r\nGoogle Docs makes creating, editing and sharing documents, spreadsheets and \r\npresentations simple and free. Your docs are stored safely online, so you can access \r\nthem any time, from anywhere. Create a doc from scratch, upload an existing doc or \r\nbrowse the template gallery for a format that suits your needs – it’s easy. You can even \r\nuse Google Docs to create an online form to collect data from others. \r\nWhy Google Docs?\r\n• Import existing docs, or create new ones \r\nfrom scratch.\r\n• Edit documents, spreadsheets and \r\npresentations from anywhere.\r\n• Share docs online and collaborate \r\ninstantly.\r\n• Store docs securely online.\r\n• Eliminate confusing email attachments \r\nand version-control issues.\r\nLearn more at\r\nhttp://docs.google.com/support \r\nCreate and edit docs. To get started, go to http://docs.google.com and click on the\r\nNew button (upper left), then create a document, spreadsheet, presentation or form. \r\nStart from scratch, upload an existing doc to edit or share online, or use a template.\r\nTo choose a template, select New > From template.\r\nAccess docs from anywhere. Because your docs are stored securely online, you can access \r\nthem from anywhere, from any computer with an Internet connection and a standard \r\nbrowser. And it’s easy to export or download your docs in a variety of formats, including \r\nHTML, PDF, CSV and others – just open your doc and select File > Download fi le as.\r\nCollaborate with others. Use the Share button (either from the Docs homepage or when \r\nediting a document) to invite others to edit your docs online. You can all view and make \r\nchanges to the same docs online. Just think: no more unwieldy email attachments – and no \r\nmore problems with version control. Just select Tools > Revision history (in documents) or \r\nthe Revisions tab (in spreadsheets or presentations) to track who changed what, and when.\n\nPublish to the web. Publishing your docs online is easy – just select Share > Publish as \r\nweb page (in documents) or the Publish tab (in spreadsheets or presentations). You can \r\nun-publish at any time. To give others the ability to view but not edit your docs, use the \r\nShare button to invite them as viewers. \r\nCollect data with forms. Select New > Form to create a form using a variety of question \r\ntypes (multiple choice, checkboxes, etc.). You can embed your form in an email, and \r\nrespondents’ answers will be added automatically to a spreadsheet, so collecting the \r\ndata you need is a snap.\r\n© Copyright 2009. Google is a trademark of Google Inc. All other company and product names may be trademarks of the respective companies \r\nwith which they are associated.\r\nTips & tricks\r\n• Import existing documents, \r\nspreadsheets and presentations to edit \r\nand share them online.\r\n• Need help with document layout? \r\nBrowse the template gallery at\r\nhttp://docs.google.com/templates to get \r\nideas for resumes, presentations, letters \r\nand more.\r\n• No connectivity? No problem. Click on \r\nthe Offl ine link to access your docs when \r\nyou’re not connected to the Internet.\r\n• Join the Google Docs Help Group to ask \r\nquestions and learn more about how \r\nothers are using Google Docs: \r\nhttp://groups.google.com/group/GoogleDocs\r\nUse keyboard shortcuts. Following are some of the many shortcuts you can use to make \r\ncreating and collaborating on docs more effi cient. Visit http://docs.google.com/support\r\nand search on ‘keyboard shortcuts’ for a complete list of shortcuts.\r\nDocuments Spreadsheets Presentations\r\nUndo Ctrl + Z ✓ ✓ ✓\r\nRedo Ctrl + Y ✓ ✓ ✓\r\nCut Ctrl + X ✓ ✓ ✓\r\nCopy Ctrl + C ✓ ✓ ✓\r\nPaste Ctrl + V ✓ ✓ ✓\r\nPrint Ctrl + P ✓ ✓ ✓\r\nFind and replace Ctrl + ... Ctrl + H Ctrl + F\r\nBulleted list Ctrl + Shift + L ✓\r\nInsert comment Ctrl + M ✓\r\nInsert slide Ctrl + M ✓\r\nRemove formatting Ctrl + Spacebar ✓\r\nSelect entire column Ctrl + Spacebar ✓\r\nSelect entire row Shift + Spacebar ✓\r\nView slideshow F5 ✓"
+    }
+  ]
+}
