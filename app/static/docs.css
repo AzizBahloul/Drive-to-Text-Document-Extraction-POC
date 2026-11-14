@@ -1,0 +1,53 @@
+/* API reference (stock Swagger UI). In light mode its labels are recoloured with the app's
+   light tokens (values mirror styles.css :root) so every one meets WCAG AA. Dark mode uses
+   Swagger UI's own dark theme, switched on by docs.js. */
+:root {
+  --blue: #2a4be8;
+  --blue-deep: #1d37b8;
+  --ok: #157a4c;
+  --warn: #8f5a00;
+  --bad: #c8322b;
+  --ink-2: #5a6475;
+  --ink-3: #636b7c;
+}
+
+body {
+  margin: 0;
+}
+
+/* Method badges: white text needs a fill of 4.5:1 or more. Selectors match Swagger UI's own. */
+html:not(.dark-mode) .swagger-ui .opblock.opblock-get .opblock-summary-method { background: var(--blue); }
+html:not(.dark-mode) .swagger-ui .opblock.opblock-post .opblock-summary-method { background: var(--ok); }
+html:not(.dark-mode) .swagger-ui .opblock.opblock-put .opblock-summary-method { background: var(--warn); }
+html:not(.dark-mode) .swagger-ui .opblock.opblock-delete .opblock-summary-method { background: var(--bad); }
+html:not(.dark-mode) .swagger-ui .opblock.opblock-patch .opblock-summary-method { background: var(--ink-2); }
+
+/* Title stamps and the schema link. */
+html:not(.dark-mode) .swagger-ui .info .title small { background: var(--ink-2); }
+html:not(.dark-mode) .swagger-ui .info .title small.version-stamp { background: var(--ok); }
+html:not(.dark-mode) .swagger-ui .info a,
+html:not(.dark-mode) .swagger-ui .info .link .url { color: var(--blue-deep); }
+
+/* Secondary text in the schema list ("Expand all"). */
+html:not(.dark-mode) .swagger-ui .json-schema-2020-12-expand-deep-button { color: var(--ink-3); }
+
+/* Swagger UI removes the focus outline from several buttons (schema rows among them);
+   keyboard users need to see where they are, in both themes. */
+.swagger-ui :focus-visible {
+  outline: 2px solid var(--blue);
+  outline-offset: 2px;
+}
+html.dark-mode .swagger-ui :focus-visible {
+  outline-color: #8fa3ff;
+}
+
+/* The "Copy path" button is zero-width until the row is hovered, so keyboard focus landed on
+   something invisible. Reveal it the same way while focus is inside the row. */
+.swagger-ui .opblock .opblock-summary:focus-within .view-line-link {
+  margin: 0 5px;
+  width: 18px;
+  transition: none; /* appear at once: a half-second grow hides where focus is */
+}
+.swagger-ui .opblock .opblock-summary:focus-within .view-line-link.copy-to-clipboard {
+  width: 24px;
+}
