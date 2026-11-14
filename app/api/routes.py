@@ -18,14 +18,15 @@ from app.api.schemas import (
     CapabilitiesResponse,
     DetailResponse,
     ErrorResponse,
+    FileOut,
     FolderRequest,
     FolderResponse,
 )
 from app.batch.manager import BatchManager, BatchNotFoundError, TooManyBatchesError
 from app.config import Settings, get_settings
-from app.drive.client import DriveClient, FolderListing
+from app.drive.client import DriveClient, DriveFile, FolderListing
 from app.drive.errors import DriveError
-from app.drive.links import parse_folder_link
+from app.drive.links import DriveFolderLink, parse_folder_link
 from app.extraction import ocr as ocr_engine
 from app.extraction.preview import reencode_thumbnail
 
@@ -124,6 +125,26 @@ async def capabilities(drive: Drive, settings: AppSettings) -> CapabilitiesRespo
     )
 
 
+def remember_listing(listings: dict, link: DriveFolderLink, listing: FolderListing) -> None:
+    listings.pop(link.folder_id, None)
+    listings[link.folder_id] = (listing, link.resource_key)
+    while len(listings) > MAX_CACHED_LISTINGS:
+        listings.pop(next(iter(listings)))
+
+
+def folder_response(link: DriveFolderLink, listing: FolderListing) -> FolderResponse:
+    return FolderResponse(
+        folder_id=listing.folder_id,
+        folder_url=link.url,
+        folder_name=listing.name,
+        source=listing.source,
+        files=[FileOut.model_validate(file.to_dict()) for file in listing.files],
+        skipped=listing.skipped,
+        folders_scanned=listing.folders_scanned,
+        folders_skipped=listing.folders_skipped,
+    )
+
+
 @router.post("/folders", response_model=FolderResponse, responses=FOLDER_ERRORS)
 async def resolve_folder(
     body: FolderRequest,
@@ -138,20 +159,82 @@ async def resolve_folder(
         depth=settings.subfolder_depth,
         max_folders=settings.max_folders,
     )
-    listings.pop(link.folder_id, None)
-    listings[link.folder_id] = (listing, link.resource_key)
-    while len(listings) > MAX_CACHED_LISTINGS:
-        listings.pop(next(iter(listings)))
-    return FolderResponse(
-        folder_id=listing.folder_id,
-        folder_url=link.url,
-        folder_name=listing.name,
-        source=listing.source,
-        files=[file.to_dict() for file in listing.files],
-        skipped=listing.skipped,
-        folders_scanned=listing.folders_scanned,
-        folders_skipped=listing.folders_skipped,
-    )
+    remember_listing(listings, link, listing)
+    return folder_response(link, listing)
+
+
+@router.post(
+    "/folders/scan",
+    response_class=StreamingResponse,
+    responses={200: {"content": {"application/x-ndjson": {}}}, **FOLDER_ERRORS},
+)
+async def scan_folder(
+    body: FolderRequest,
+    drive: Drive,
+    listings: Listings,
+    settings: AppSettings,
+) -> Response:
+    """List a folder like ``POST /folders``, streaming the documents as each folder is read.
+
+    One JSON object per line: ``{"type": "found", "folder_id", "files"}`` after every folder
+    read (the shared one first, even if empty), then ``{"type": "done", "folder": ...}`` with
+    the same body ``POST /folders`` returns, or ``{"type": "error", "error", "kind"}``. The
+    shared folder is read before the response starts, so a bad or private link is still a
+    plain JSON error with its status code. Thumbnails of the documents found so far can be
+    requested while the scan goes on.
+    """
+    link = parse_folder_link(body.url)
+    events: asyncio.Queue[dict] = asyncio.Queue()
+    found: list[DriveFile] = []
+
+    def on_found(files: tuple[DriveFile, ...]) -> None:
+        found.extend(files)
+        partial = FolderListing(link.folder_id, None, tuple(found), drive.mode)
+        remember_listing(listings, link, partial)
+        files_out = [file.to_dict() for file in files]
+        events.put_nowait({"type": "found", "folder_id": link.folder_id, "files": files_out})
+
+    async def scan() -> None:
+        try:
+            listing = await drive.list_tree(
+                link.folder_id,
+                link.resource_key,
+                depth=settings.subfolder_depth,
+                max_folders=settings.max_folders,
+                on_found=on_found,
+            )
+        except DriveError as exc:
+            events.put_nowait({"type": "error", "exc": exc})
+        except Exception:
+            log.exception("Scanning folder %s failed", link.folder_id)
+            failure = DriveError("upstream", "The folder could not be read. Try again.")
+            events.put_nowait({"type": "error", "exc": failure})
+        else:
+            remember_listing(listings, link, listing)
+            response = folder_response(link, listing)
+            events.put_nowait({"type": "done", "folder": response.model_dump()})
+
+    task = asyncio.create_task(scan())
+    first = await events.get()
+    if first["type"] == "error":
+        return drive_error_response(first["exc"])
+
+    async def stream() -> AsyncIterator[str]:
+        event = first
+        try:
+            while True:
+                if event["type"] == "error":
+                    exc = event["exc"]
+                    event = {"type": "error", "error": exc.message, "kind": exc.kind}
+                yield json.dumps(event) + "\n"
+                if event["type"] != "found":
+                    return
+                event = await events.get()
+        finally:
+            task.cancel()  # the page went away: stop reading Drive for it
+
+    headers = {"Cache-Control": "no-store", "X-Accel-Buffering": "no"}
+    return StreamingResponse(stream(), media_type="application/x-ndjson", headers=headers)
 
 
 @router.get(

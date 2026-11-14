@@ -18,9 +18,7 @@
   --blue-soft: #e4e9ff;
   --on-blue: #ffffff; /* text on a --blue fill */
   --mark: #ffe34d;
-  --mark-soft: #fff4b8;
   --ok: #157a4c;
-  --ok-soft: #dff3e8;
   --warn: #8f5a00; /* 5.1:1 on --paper, 5.0:1 on --warn-soft (AA) */
   --warn-soft: #fbeed4;
   --bad: #c8322b;
@@ -54,9 +52,7 @@
     --blue-soft: #212b4d;
     --on-blue: #0e1117; /* the dark-theme blue is light: white on it was 2.8:1 */
     --mark: #f0d23b;
-    --mark-soft: #4c4420;
     --ok: #4fc98a;
-    --ok-soft: #18302a;
     --warn: #e2a443;
     --warn-soft: #3a2f17;
     --bad: #ff6f66;
@@ -82,9 +78,7 @@
   --blue-soft: #212b4d;
   --on-blue: #0e1117; /* the dark-theme blue is light: white on it was 2.8:1 */
   --mark: #f0d23b;
-  --mark-soft: #4c4420;
   --ok: #4fc98a;
-  --ok-soft: #18302a;
   --warn: #e2a443;
   --warn-soft: #3a2f17;
   --bad: #ff6f66;
@@ -498,78 +492,75 @@ a:hover { color: var(--blue-deep); }
 .field-error { margin: 10px 0 0; color: var(--bad); font-weight: 500; }
 .field-hint { margin: 10px 0 0; color: var(--ink-3); font-size: 14px; }
 
-/* Fetching: sheets leave the Drive folder and land in the list while the folder is read.
+/* Fetching: while the folder is read, a blank page is scanned; once the listing is back the
+   real first pages slide in one by one, in the order Drive returns their thumbnails.
    It waits 250ms before showing, so a fast listing never flashes it. */
 .fetching {
   display: flex;
   align-items: center;
-  gap: 20px;
+  gap: 24px;
   margin-top: 18px;
-  padding: 12px 20px 12px 16px;
+  padding: 12px 22px 12px 12px;
   background: var(--sheet);
   border: 1px solid var(--rule);
   border-radius: 8px;
   box-shadow: var(--shadow);
   animation: rise var(--t-base) 250ms var(--ease-out) both;
 }
-.fetch-text { margin: 0; color: var(--ink-2); font-weight: 500; }
-.fetch-art { position: relative; flex: none; width: 176px; height: 60px; }
-.fetch-folder,
-.fetch-folder-front { position: absolute; left: 0; width: 44px; border: 1.5px solid var(--blue); }
-.fetch-folder { top: 20px; height: 32px; border-radius: 2px 6px 5px 5px; background: var(--blue-soft); }
-.fetch-folder::before {
-  content: "";
-  position: absolute;
-  left: -1.5px;
-  top: -7px;
-  width: 18px;
-  height: 7px;
-  border: 1.5px solid var(--blue);
-  border-bottom: 0;
-  border-radius: 3px 3px 0 0;
-  background: var(--blue-soft);
+.fetch-reel {
+  position: relative;
+  flex: none;
+  width: 360px;
+  height: 176px;
+  overflow: hidden;
+  border-radius: 6px;
+  background: var(--paper);
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 24%, #000 76%, transparent);
+  mask-image: linear-gradient(to right, transparent, #000 24%, #000 76%, transparent);
 }
-.fetch-folder-front { top: 32px; height: 20px; border-radius: 3px 3px 5px 5px; background: color-mix(in srgb, var(--blue) 22%, var(--sheet)); }
-.fetch-sheet {
+.fetch-slide {
+  --o: 1;
   position: absolute;
-  left: 13px;
-  top: 22px;
-  width: 16px;
-  height: 20px;
-  padding: 4px 3px;
-  border: 1.5px solid var(--ink-2);
-  border-radius: 1px 4px 1px 1px;
-  background: repeating-linear-gradient(to bottom, var(--ink-3) 0 1.5px, transparent 1.5px 4px) content-box, var(--sheet);
-  opacity: 0;
-  animation: fetch-fly 2.4s var(--ease-in-out) infinite;
+  top: 14px;
+  left: calc(50% - 57px);
+  width: 114px;
+  height: 148px;
+  overflow: hidden;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, var(--rule) 0 2px, transparent 2px 8px) 11px 14px / calc(100% - 22px) calc(100% - 28px) no-repeat, var(--sheet);
+  box-shadow: var(--shadow);
+  opacity: 0.55;
+  transform: translateX(calc(var(--o) * 132px)) scale(0.84);
+  transition: transform 520ms var(--ease-out), opacity 520ms var(--ease-out), border-color var(--t-base);
 }
-.fetch-sheet:nth-child(2) { --tx: 61px; --ty: -18px; }
-.fetch-sheet:nth-child(3) { --tx: 61px; --ty: -2px; animation-delay: 0.8s; }
-.fetch-sheet:nth-child(4) { --tx: 61px; --ty: 14px; animation-delay: 1.6s; }
-.fetch-slot { position: absolute; left: 82px; height: 8px; border-radius: 4px; background: var(--rule); overflow: hidden; }
-.fetch-slot::after {
-  content: "";
+.fetch-slide.is-current { opacity: 1; transform: translateX(0) scale(1); border-color: var(--blue); }
+.fetch-slide.is-incoming,
+.fetch-slide.is-gone { opacity: 0; }
+.fetch-slide img {
   position: absolute;
   inset: 0;
-  background: var(--blue);
-  transform-origin: left center;
-  transform: scaleX(0);
-  animation: fetch-fill 2.4s var(--ease-out) infinite;
-  animation-delay: inherit;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top;
+  background: var(--sheet);
 }
-.fetch-slot:nth-child(6) { top: 10px; width: 94px; }
-.fetch-slot:nth-child(7) { top: 26px; width: 72px; animation-delay: 0.8s; }
-.fetch-slot:nth-child(8) { top: 42px; width: 84px; animation-delay: 1.6s; }
-@keyframes fetch-fly {
-  0% { opacity: 0; transform: translate(0, 10px); }
-  14% { opacity: 1; transform: translate(0, -12px); }
-  52% { opacity: 1; transform: translate(var(--tx), var(--ty)) scale(0.8); }
-  64%, 100% { opacity: 0; transform: translate(calc(var(--tx) + 10px), var(--ty)) scale(0.5); }
-}
-@keyframes fetch-fill {
-  0%, 52% { opacity: 1; transform: scaleX(0); }
-  72% { opacity: 1; transform: scaleX(1); }
-  94%, 100% { opacity: 0; transform: scaleX(1); }
+.fetch-beam { z-index: 1; }
+/* One sweep as each page lands; while the scan is still going, the page in front keeps sweeping. */
+.fetch-slide.is-current .fetch-beam { animation: page-beam 900ms var(--ease-in-out) 120ms both; }
+.fetch-reel.is-scanning .fetch-slide.is-current .fetch-beam { animation: page-beam 1.4s linear 600ms infinite; }
+.fetch-reel.is-scanning .fetch-slide.is-blank .fetch-beam { animation-delay: 0s; }
+.fetch-info { flex: 1; min-width: 0; }
+.fetch-text { margin: 0; color: var(--ink-2); font-weight: 500; }
+.fetch-name {
+  min-height: 1.45em;
+  margin: 4px 0 0;
+  overflow: hidden;
+  font-size: 13px;
+  color: var(--ink-3);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @keyframes nudge {
@@ -821,7 +812,8 @@ a:hover { color: var(--blue-deep); }
 .has-image > img { opacity: 1; }
 .job-row[data-status="pending"] .job-page.has-image > img { opacity: 0.5; filter: grayscale(1); }
 .job-beam,
-.live-beam {
+.live-beam,
+.fetch-beam {
   position: absolute;
   inset: 0;
   border-bottom: 2px solid var(--blue);
@@ -1111,7 +1103,8 @@ a:hover { color: var(--blue-deep); }
   .file-row { grid-template-columns: minmax(0, 1fr) auto; }
   .file-size { display: none; }
   .job-row { grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-areas: "page status meta" "page name name" "page stamp stamp" "page snippet snippet" "page error error" "live live live"; }
-  .fetch-art { transform: scale(0.8); transform-origin: left center; margin-right: -35px; }
+  .fetching { flex-direction: column; align-items: stretch; gap: 14px; padding: 12px; }
+  .fetch-reel { width: 100%; }
   .job-live-inner { grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-left: 0; }
   .run-action { align-items: stretch; width: 100%; }
   .stage-actions { width: 100%; }
@@ -1127,7 +1120,8 @@ a:hover { color: var(--blue-deep); }
   .splash { display: none; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
   .file-row, .sheet { opacity: 1; transform: none; }
-  .fetch-sheet, .job-beam, .live-beam, .file-thumb::after { display: none; }
-  .fetch-slot::after { animation: none; transform: scaleX(0.6); }
+  .fetch-beam, .job-beam, .live-beam, .file-thumb::after { display: none; }
+  .fetch-slide { transform: none; }
+  .fetch-slide:not(.is-current) { opacity: 0; }
   .job-row[data-status="processing"] .job-page i { animation: none; opacity: 1; }
 }

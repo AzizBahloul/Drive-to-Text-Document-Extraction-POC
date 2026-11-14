@@ -20,7 +20,7 @@ import html
 import logging
 import os
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from dataclasses import dataclass, replace
 from enum import StrEnum
 from pathlib import Path
@@ -377,6 +377,7 @@ class DriveClient:
         *,
         depth: int = 3,
         max_folders: int = 50,
+        on_found: Callable[[tuple[DriveFile, ...]], None] | None = None,
     ) -> FolderListing:
         """List a folder and its subfolders, level by level, ``depth`` levels down.
 
@@ -385,9 +386,14 @@ class DriveClient:
         be read is counted in ``folders_skipped`` instead of failing the whole listing;
         only the shared folder itself must be readable. Every file records the path of
         the folder it was found in.
+
+        ``on_found`` is called with the new documents as each folder comes back: once for
+        the shared folder (even when it holds none), then for every subfolder that adds some.
         """
         root = await self.list_folder(folder_id, resource_key)
         files = list(root.files)
+        if on_found:
+            on_found(root.files)
         seen_files = {file.id for file in files}
         skipped = root.skipped
         scanned, left_out, attempted = 1, 0, 1
@@ -395,9 +401,19 @@ class DriveClient:
         frontier = [(sub, sub.name, 1) for sub in root.subfolders]
         limit = asyncio.Semaphore(SUBFOLDER_CONCURRENCY)
 
-        async def read(sub: Subfolder) -> FolderListing:
+        announced = set(seen_files)
+
+        async def read(sub: Subfolder, path: str) -> FolderListing:
             async with limit:
-                return await self.list_folder(sub.id, sub.resource_key)
+                result = await self.list_folder(sub.id, sub.resource_key)
+            if on_found:  # as soon as this folder is back, not when its whole level is
+                new = tuple(
+                    replace(file, folder=path) for file in result.files if file.id not in announced
+                )
+                announced.update(file.id for file in new)
+                if new:
+                    on_found(new)
+            return result
 
         while frontier:
             level: list[tuple[Subfolder, str, int]] = []
@@ -412,7 +428,7 @@ class DriveClient:
                 level.append((sub, path, level_depth))
             frontier = []
             results = await asyncio.gather(
-                *(read(sub) for sub, _, _ in level), return_exceptions=True
+                *(read(sub, path) for sub, path, _ in level), return_exceptions=True
             )
             for (sub, path, level_depth), result in zip(level, results, strict=True):
                 if isinstance(result, DriveError):

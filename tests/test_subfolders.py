@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+
 import httpx
 import pytest
 from fastapi.testclient import TestClient
@@ -151,3 +153,92 @@ def test_folder_endpoint_reports_paths_and_folder_counts() -> None:
         ("French", "cv.pdf"),
     ]
     assert body["folders_scanned"] == 4 and body["folders_skipped"] == 0
+
+
+# ----- streaming the listing as each folder comes back ------------------------------------
+
+
+async def test_found_documents_are_reported_folder_by_folder() -> None:
+    reports: list[tuple] = []
+    listing = await TreeDrive(resumes_tree()).list_tree(ROOT, on_found=reports.append)
+    assert reports[0] == ()  # the shared folder, read first, holds nothing itself
+    found = sorted((f.folder, f.id) for batch in reports for f in batch)
+    assert found == sorted((f.folder, f.id) for f in listing.files)
+    assert all(batch for batch in reports[1:])  # empty subfolders are not reported
+
+
+async def test_a_document_seen_twice_is_reported_once() -> None:
+    tree = resumes_tree()
+    tree["french"] = ([drive_file("cv.pdf", FileKind.PDF, file_id="cv-en")], [])
+    reports: list[tuple] = []
+    await TreeDrive(tree).list_tree(ROOT, on_found=reports.append)
+    ids = [f.id for batch in reports for f in batch]
+    assert sorted(ids) == ["cv-en", "old"]
+
+
+def _scan(drive: DriveClient, folder: str = ROOT) -> httpx.Response:
+    settings = Settings(google_api_key=None, allowed_hosts="testserver", _env_file=None)
+    app = create_app(settings=settings, drive=drive)
+    with TestClient(app) as client:
+        url = f"https://drive.google.com/drive/folders/{folder}"
+        return client.post("/api/folders/scan", json={"url": url})
+
+
+def test_scan_endpoint_streams_found_documents_then_the_full_listing() -> None:
+    response = _scan(TreeDrive(resumes_tree()))
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("application/x-ndjson")
+    events = [json.loads(line) for line in response.text.splitlines()]
+    assert [e["type"] for e in events[:1]] == ["found"] and events[0]["files"] == []
+    assert events[-1]["type"] == "done"
+    assert {e["folder_id"] for e in events[:-1]} == {ROOT}
+    streamed = sorted(f["id"] for e in events[:-1] for f in e["files"])
+    done = events[-1]["folder"]
+    assert streamed == sorted(f["id"] for f in done["files"])
+    assert [(f["folder"], f["name"]) for f in done["files"]] == [
+        ("English", "cv.pdf"),
+        ("English/archive", "old.png"),
+        ("French", "cv.pdf"),
+    ]
+    assert done["folders_scanned"] == 4
+
+
+def test_scan_endpoint_refuses_an_unreadable_folder_before_streaming() -> None:
+    response = _scan(TreeDrive({}), folder="lockedRootFolderIdAbCdEfGh")
+    assert response.status_code == 404
+    assert response.json()["kind"] == "not_found"
+
+
+def test_scan_endpoint_rejects_a_link_that_is_not_a_folder() -> None:
+    settings = Settings(google_api_key=None, allowed_hosts="testserver", _env_file=None)
+    app = create_app(settings=settings, drive=TreeDrive(resumes_tree()))
+    with TestClient(app) as client:
+        response = client.post("/api/folders/scan", json={"url": "https://example.com/x"})
+    assert response.status_code == 400
+
+
+def test_thumbnails_of_found_documents_are_allowed_before_the_scan_ends() -> None:
+    # The listing cache is filled as documents are found, so the page can show them early.
+    seen: list[bool] = []
+
+    class WatchingDrive(TreeDrive):
+        async def list_folder(self, folder_id, resource_key=None):
+            if folder_id == "french":  # by now the English documents have been announced
+                listing, _ = app.state.listings[ROOT]
+                seen.append(any(f.id == "cv-en" for f in listing.files))
+            return await super().list_folder(folder_id, resource_key)
+
+    tree = {
+        ROOT: ([], [Subfolder("english", "English")]),
+        "english": (
+            [drive_file("cv.pdf", FileKind.PDF, file_id="cv-en")],
+            [Subfolder("french", "French")],
+        ),
+        "french": ([], []),
+    }
+    settings = Settings(google_api_key=None, allowed_hosts="testserver", _env_file=None)
+    app = create_app(settings=settings, drive=WatchingDrive(tree))
+    with TestClient(app) as client:
+        url = f"https://drive.google.com/drive/folders/{ROOT}"
+        assert client.post("/api/folders/scan", json={"url": url}).status_code == 200
+    assert seen == [True]

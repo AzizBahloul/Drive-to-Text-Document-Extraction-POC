@@ -34,6 +34,9 @@ const el = {
   linkSubmit: $("linkSubmit"),
   linkError: $("linkError"),
   fetching: $("fetching"),
+  fetchReel: $("fetchReel"),
+  fetchText: $("fetchText"),
+  fetchName: $("fetchName"),
   filesTitle: $("filesTitle"),
   folderSummary: $("folderSummary"),
   folderLink: $("folderLink"),
@@ -107,6 +110,16 @@ function stampClass(method) {
   return { ocr: "stamp-ocr", mixed: "stamp-mixed" }[method] || "stamp-parser";
 }
 
+function refusal(response, payload) {
+  return (
+    payload?.error ||
+    (typeof payload?.detail === "string" ? payload.detail : null) ||
+    (response.status >= 500
+      ? `The server hit an error (HTTP ${response.status}). Try again in a moment; if it keeps failing, the server log has the details.`
+      : `The request was refused (HTTP ${response.status}). Reload the page and try again.`)
+  );
+}
+
 async function api(path, options = {}) {
   let response;
   try {
@@ -124,13 +137,7 @@ async function api(path, options = {}) {
     payload = null;
   }
   if (!response.ok) {
-    const message =
-      payload?.error ||
-      (typeof payload?.detail === "string" ? payload.detail : null) ||
-      (response.status >= 500
-        ? `The server hit an error (HTTP ${response.status}). Try again in a moment; if it keeps failing, the server log has the details.`
-        : `The request was refused (HTTP ${response.status}). Reload the page and try again.`);
-    throw new Error(message);
+    throw new Error(refusal(response, payload));
   }
   return payload;
 }
@@ -241,25 +248,204 @@ el.linkForm.addEventListener("submit", async (event) => {
   }
   setBusy(el.linkSubmit, true);
   el.linkField.classList.add("is-busy");
+  const run = ++reel.run;
+  const show = reelStart(run);
   el.fetching.hidden = false;
   closeStagesAfter("link");
   stopBatchStream();
   try {
-    const folder = await api("/api/folders", { method: "POST", body: JSON.stringify({ url }) });
+    const folder = await scanFolder(url, (folderId, files) => show.add(folderId, files));
+    if (run !== reel.run) return;
     state.folder = folder;
     state.files = folder.files;
     state.selected = new Set();
+    await show.done(folder.files.length);
+    if (run !== reel.run) return;
     renderFiles();
     openStage("files");
     focusHeading(el.filesTitle);
   } catch (error) {
+    show.stop();
     failLink(error.message);
   } finally {
-    setBusy(el.linkSubmit, false);
-    el.linkField.classList.remove("is-busy");
-    el.fetching.hidden = true;
+    if (run === reel.run) {
+      setBusy(el.linkSubmit, false);
+      el.linkField.classList.remove("is-busy");
+      el.fetching.hidden = true;
+    }
   }
 });
+
+// List a folder through the streaming endpoint: onFound(folderId, files) runs after each
+// folder Drive returns, and the promise resolves with the full listing.
+async function scanFolder(url, onFound) {
+  let response;
+  try {
+    response = await fetch("/api/folders/scan", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url }),
+    });
+  } catch {
+    throw new Error("Cannot reach the server. Check that it is still running, then try again.");
+  }
+  if (!response.ok) {
+    let payload = null;
+    try {
+      payload = await response.json();
+    } catch {
+      payload = null;
+    }
+    throw new Error(refusal(response, payload));
+  }
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  for (;;) {
+    let chunk;
+    try {
+      chunk = await reader.read();
+    } catch {
+      break;
+    }
+    buffer += decoder.decode(chunk.value || new Uint8Array(), { stream: !chunk.done });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const event = JSON.parse(line);
+      if (event.type === "found") onFound(event.folder_id, event.files);
+      else if (event.type === "done") return event.folder;
+      else if (event.type === "error") throw new Error(event.error);
+    }
+    if (chunk.done) break;
+  }
+  throw new Error("The connection dropped before the folder was fully read. Try again.");
+}
+
+/* The fetching card, an automatic slider of what the scan finds. While the first folder is
+   read it sweeps a blank page; then each document's first page is requested from Drive as soon
+   as the document is found, and slides in the moment it arrives, so the order on screen is the
+   order things were fetched. Once the scan is done the list opens after a few more pages. */
+const REEL_DWELL_MS = 650; // each page stays in front at least this long
+const REEL_LIMIT = 8; // once the scan is done, the list opens after this many pages in all
+const REEL_TAIL_MS = 4000; // ... or this long after the scan finished, whichever comes first
+const REEL_POOL = 24; // first pages requested at most, in the order documents are found
+const reel = { run: 0 };
+
+function reelStart(run) {
+  const blank = reelSlide(null);
+  blank.classList.add("is-current", "is-blank");
+  blank.style.setProperty("--o", 0);
+  el.fetchReel.replaceChildren(blank);
+  el.fetchReel.classList.add("is-scanning");
+  el.fetchText.textContent = "Reading the folder on Drive";
+  el.fetchName.textContent = "";
+
+  const arrived = [];
+  let requested = 0;
+  let settled = 0;
+  let found = 0;
+  let shown = 0;
+  let lastShown = -Infinity;
+  let finishedAt = null;
+  let finish = null;
+  let timer = 0;
+  const live = () => run === reel.run;
+
+  const step = () => {
+    if (!live()) return finish?.();
+    const now = performance.now();
+    if (arrived.length && now - lastShown >= REEL_DWELL_MS) {
+      const { file, src } = arrived.shift();
+      shown += 1;
+      lastShown = now;
+      reelShow(file, src);
+    }
+    if (finishedAt !== null) {
+      const nothingLeft = settled === requested && !arrived.length;
+      if (shown >= REEL_LIMIT || nothingLeft || now - finishedAt >= REEL_TAIL_MS) {
+        // Let the page in front be seen before the list replaces it.
+        timer = setTimeout(finish, shown ? Math.max(0, lastShown + REEL_DWELL_MS - now) : 0);
+        return;
+      }
+    }
+    timer = setTimeout(step, 50);
+  };
+  step();
+
+  return {
+    add(folderId, files) {
+      if (!live()) return;
+      found += files.length;
+      if (found) el.fetchText.textContent = `Found ${plural(found, "document")} so far`;
+      for (const file of files) {
+        if (requested >= REEL_POOL) break;
+        requested += 1;
+        const img = new Image();
+        img.onload = () => {
+          settled += 1;
+          if (live()) arrived.push({ file, src: img.src });
+        };
+        img.onerror = () => {
+          settled += 1;
+        };
+        img.src = thumbUrl(file, folderId);
+      }
+    },
+    done(total) {
+      el.fetchReel.classList.remove("is-scanning");
+      el.fetchText.textContent = total
+        ? `Found ${plural(total, "document")}`
+        : "No documents in this folder";
+      finishedAt = performance.now();
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    },
+    stop() {
+      clearTimeout(timer);
+      el.fetchReel.classList.remove("is-scanning");
+    },
+  };
+}
+
+function reelSlide(src) {
+  const slide = document.createElement("div");
+  slide.className = "fetch-slide";
+  if (src) {
+    const img = document.createElement("img");
+    img.alt = "";
+    img.src = src;
+    slide.appendChild(img);
+  }
+  const beam = document.createElement("b");
+  beam.className = "fetch-beam";
+  slide.appendChild(beam);
+  return slide;
+}
+
+function reelShow(file, src) {
+  const slide = reelSlide(src);
+  slide.classList.add("is-incoming");
+  el.fetchReel.appendChild(slide);
+  void slide.offsetWidth; // start from the right, then move in
+  for (const other of [...el.fetchReel.children]) {
+    if (other === slide) continue;
+    const offset = Number(other.style.getPropertyValue("--o") || 0) - 1;
+    other.style.setProperty("--o", offset);
+    other.classList.remove("is-current");
+    if (other.classList.contains("is-blank")) other.classList.add("is-gone");
+    if (offset < -2 || other.classList.contains("is-gone")) setTimeout(() => other.remove(), 600);
+  }
+  slide.classList.remove("is-incoming");
+  slide.classList.add("is-current");
+  slide.style.setProperty("--o", 0);
+  // Name the page once it is mostly in front, not while the previous one still is.
+  setTimeout(() => {
+    if (slide.classList.contains("is-current")) el.fetchName.textContent = filePath(file);
+  }, REDUCED_MOTION ? 0 : 140);
+}
 
 function failLink(message) {
   showError(el.linkError, message);
@@ -571,8 +757,8 @@ function updateJobNode(node, job, previousStatus) {
 /* ------------------------------------------------------------------ real page images */
 
 // Drive's thumbnail of a listed file, fetched and re-encoded by the server.
-function thumbUrl(file) {
-  const folder = encodeURIComponent(state.folder?.folder_id || "");
+function thumbUrl(file, folderId = state.folder?.folder_id) {
+  const folder = encodeURIComponent(folderId || "");
   return `/api/folders/${folder}/files/${encodeURIComponent(file.id)}/thumbnail`;
 }
 

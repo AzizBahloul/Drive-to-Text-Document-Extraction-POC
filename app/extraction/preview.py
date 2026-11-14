@@ -10,6 +10,7 @@ import io
 import logging
 import math
 from pathlib import Path
+from types import TracebackType
 
 from PIL import Image, ImageOps, UnidentifiedImageError
 
@@ -78,9 +79,14 @@ class PagePreviewer:
             self._context = None
         return self
 
-    def __exit__(self, *exc_info: object) -> None:
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        traceback: TracebackType | None,
+    ) -> None:
         if self._context is not None:
-            self._context.__exit__(*exc_info)
+            self._context.__exit__(exc_type, exc, traceback)
         self._context = self._document = None
 
     def render(self, number: int) -> bytes | None:

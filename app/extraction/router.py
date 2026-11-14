@@ -136,8 +136,10 @@ def extract_pdf(
     workers = max(1, options.ocr_workers)
 
     def run_ocr(image: Image.Image) -> tuple[str, bool]:
+        language = options.ocr_language
+        assert language is not None  # pages only reach OCR when Tesseract is installed
         try:
-            text = ocr_engine.ocr_image(image, options.ocr_language, timeout=options.ocr_timeout_s)
+            text = ocr_engine.ocr_image(image, language, timeout=options.ocr_timeout_s)
             return text, False
         except ocr_engine.OcrTimeoutError:
             return "", True

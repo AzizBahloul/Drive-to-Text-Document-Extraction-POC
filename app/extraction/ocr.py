@@ -13,7 +13,6 @@ from PIL import Image, ImageOps
 
 log = logging.getLogger(__name__)
 
-KNOWN_LANGUAGES = {"eng": "English", "fra": "French", "ara": "Arabic"}
 _LANGUAGE_RE = re.compile(r"^[a-z]{3}(?:_[a-z]+)?(?:\+[a-z]{3}(?:_[a-z]+)?)*$")
 MIN_SIDE_PX = 1200
 # Upper bound on the pixels handed to Tesseract, for input images and for rendered PDF
@@ -99,7 +98,9 @@ def prepare_image(image: Image.Image) -> Image.Image:
         budget = math.sqrt(MAX_PIXELS / (width * height))
         factor = min(MIN_SIDE_PX / shortest, 4.0, budget)
         if factor > 1:
-            image = image.resize((round(width * factor), round(height * factor)), Image.LANCZOS)
+            image = image.resize(
+                (round(width * factor), round(height * factor)), Image.Resampling.LANCZOS
+            )
     return image
 
 
@@ -115,7 +116,11 @@ def ocr_image(image: Image.Image, language: str, *, psm: int = 3, timeout: float
     prepared.format = "BMP"
     try:
         text = pytesseract.image_to_string(
-            prepared, lang=language, config=f"--psm {psm}", timeout=timeout
+            prepared,
+            lang=language,
+            config=f"--psm {psm}",
+            # Its stub says int; the value goes to subprocess, which takes float seconds.
+            timeout=timeout,  # pyright: ignore[reportArgumentType]
         )
     except RuntimeError as exc:
         if "timeout" in str(exc).lower():

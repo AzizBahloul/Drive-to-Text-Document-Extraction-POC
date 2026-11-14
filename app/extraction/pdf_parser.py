@@ -14,7 +14,7 @@ import math
 import re
 import threading
 import unicodedata
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -99,7 +99,9 @@ def render_scale(width_pt: float, height_pt: float, dpi: int, max_pixels: int) -
 def render_page(page: pdfium.PdfPage, dpi: int, max_pixels: int) -> Image.Image:
     width, height = page.get_size()
     # Grayscale straight from PDFium: OCR needs nothing more, and it is a third of the memory.
-    bitmap = page.render(scale=render_scale(width, height, dpi, max_pixels), grayscale=True)
+    # PDFium takes a float scale; pypdfium2 only infers int from its default of 1.
+    scale = render_scale(width, height, dpi, max_pixels)
+    bitmap = page.render(scale=scale, grayscale=True)  # pyright: ignore[reportArgumentType]
     try:
         # to_pil() shares the bitmap's buffer for grayscale; copy so the image owns its pixels
         # before it leaves the lock and travels to an OCR thread.
@@ -120,7 +122,7 @@ def iter_page_sources(
     dpi: int,
     max_pixels: int = 60_000_000,
     render: bool = True,
-) -> Iterator[tuple[int, str, Image.Image | None]]:
+) -> Generator[tuple[int, str, Image.Image | None], None, None]:
     """Yield ``(page_number, text, image)`` for every page.
 
     ``image`` is the rendered page when it has no usable text layer (and ``render`` is

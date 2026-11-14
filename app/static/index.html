@@ -54,7 +54,7 @@
   </button>
 </header>
 
-<main class="flow" id="flow">
+<main class="flow">
   <aside class="spine" aria-hidden="true">
     <div class="spine-track"><div class="spine-fill" id="spineFill"></div></div>
     <ol class="spine-nodes">
@@ -77,7 +77,7 @@
           <label class="link-label" for="linkInput">Public Google Drive folder link</label>
           <div class="link-field" id="linkField">
             <input class="link-input" id="linkInput" type="url" inputmode="url" autocomplete="off" spellcheck="false"
-                   placeholder="https://drive.google.com/drive/folders/…" required>
+                   placeholder="https://drive.google.com/drive/folders/…" aria-describedby="linkHint" required>
             <button class="button button-primary" id="linkSubmit" type="submit">
               <span class="button-label">List files</span>
               <span class="button-spinner" aria-hidden="true"></span>
@@ -86,17 +86,11 @@
           <p class="field-error" id="linkError" role="alert" hidden></p>
           <p class="field-hint" id="linkHint">The folder must be shared as "Anyone with the link". Documents in its subfolders are listed too.</p>
           <div class="fetching" id="fetching" hidden>
-            <div class="fetch-art" aria-hidden="true">
-              <span class="fetch-folder"></span>
-              <span class="fetch-sheet"></span>
-              <span class="fetch-sheet"></span>
-              <span class="fetch-sheet"></span>
-              <span class="fetch-folder-front"></span>
-              <span class="fetch-slot"></span>
-              <span class="fetch-slot"></span>
-              <span class="fetch-slot"></span>
+            <div class="fetch-reel" id="fetchReel" aria-hidden="true"></div>
+            <div class="fetch-info">
+              <p class="fetch-text" id="fetchText" role="status">Reading the folder on Drive</p>
+              <p class="fetch-name" id="fetchName" dir="auto"></p>
             </div>
-            <p class="fetch-text" role="status">Reading the folder on Drive</p>
           </div>
         </form>
       </div>

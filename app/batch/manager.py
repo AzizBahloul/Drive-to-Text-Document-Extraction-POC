@@ -88,10 +88,10 @@ class BatchManager:
 
     def _prune(self) -> None:
         """Forget the oldest finished batches so memory stays bounded."""
-        finished = [batch for batch in self._batches.values() if batch.finished_at is not None]
+        finished = [(b.finished_at, b.id) for b in self._batches.values() if b.finished_at]
         excess = len(finished) - self._settings.batch_retention + 1
-        for batch in sorted(finished, key=lambda b: b.finished_at)[: max(excess, 0)]:
-            del self._batches[batch.id]
+        for _, batch_id in sorted(finished)[: max(excess, 0)]:
+            del self._batches[batch_id]
 
     def get(self, batch_id: str) -> Batch:
         try:

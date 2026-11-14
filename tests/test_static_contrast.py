@@ -120,7 +120,7 @@ def _keyframes(name: str) -> str:
 
 def test_loader_and_stage_motion_animate_only_compositor_properties() -> None:
     # transform and opacity skip layout and paint; anything else would repaint every frame.
-    names = ("read", "stage-rise", "badge-in", "fetch-fly", "fetch-fill", "page-write")
+    names = ("read", "stage-rise", "badge-in", "page-write")
     names += ("page-beam", "page-fetch", "page-settle", "thumb-beam", "page-lay")
     for name in names:
         props = set(re.findall(r"([a-z-]+)\s*:", _keyframes(name)))
@@ -133,7 +133,7 @@ def test_loader_and_stage_motion_animate_only_compositor_properties() -> None:
 
 def test_reduced_motion_stops_the_fetch_and_reading_loops() -> None:
     reduced = CSS[CSS.index("@media (prefers-reduced-motion: reduce)") :]
-    assert ".fetch-sheet, .job-beam, .live-beam, .file-thumb::after { display: none; }" in reduced
+    assert ".fetch-beam, .job-beam, .live-beam, .file-thumb::after { display: none; }" in reduced
     assert '.job-row[data-status="processing"] .job-page i { animation: none;' in reduced
 
 
