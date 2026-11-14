@@ -18,6 +18,9 @@ Built for the DI Xpertia technical assessment TA-2026-01.
 - Detects scanned PDF pages and OCRs them automatically, page by page, so mixed documents work.
 - OCR in English, French and Arabic, alone or combined.
 - Shows the text, method, pages, characters and time for each file, and exports the batch as JSON.
+- Shows the real documents: Drive thumbnails in the file list, and while a batch runs, each
+  file opens onto the page being read at that moment ("Page 37 of 1,015"), with the text taken
+  from it. When the batch is done the list folds away and the results take its place.
 - Light and dark theme.
 
 ## Quick start
@@ -112,7 +115,7 @@ A full example is in [`samples/sample-output.json`](samples/sample-output.json).
 ## Tests
 
 ```bash
-pytest                                      # about 155 tests, a few seconds
+pytest                                      # about 180 tests, a few seconds
 ruff check app tests && ruff format --check app tests
 ```
 

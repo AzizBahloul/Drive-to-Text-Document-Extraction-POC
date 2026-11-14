@@ -12,6 +12,7 @@ from __future__ import annotations
 import logging
 import time
 from collections import deque
+from collections.abc import Callable
 from concurrent.futures import Future, ThreadPoolExecutor
 from contextlib import closing
 from dataclasses import dataclass
@@ -42,15 +43,57 @@ class UnsupportedFileError(ValueError):
     """The file is neither a PDF nor a supported image."""
 
 
-def extract_file(path: Path, kind: FileKind, options: ExtractionOptions) -> ExtractionResult:
+@dataclass(frozen=True)
+class PageEvent:
+    """One page reached: ``text`` is None while OCR is still reading it."""
+
+    number: int
+    total: int
+    method: Method
+    text: str | None
+
+
+PageCallback = Callable[[PageEvent], None]
+
+
+def _report(on_page: PageCallback | None, event: PageEvent) -> None:
+    """Progress is for display only; a failing callback must never stop the extraction."""
+    if on_page is None:
+        return
+    try:
+        on_page(event)
+    except Exception:
+        log.exception("Page progress callback failed")
+
+
+def _ocr_done(on_page: PageCallback, number: int, total: int) -> Callable[[Future], None]:
+    """Report an OCR'd page once Tesseract returns (runs on the OCR thread)."""
+
+    def callback(future: Future[tuple[str, bool]]) -> None:
+        if future.cancelled() or future.exception() is not None:
+            return  # the failure surfaces through the extraction itself
+        _report(on_page, PageEvent(number, total, Method.OCR, future.result()[0]))
+
+    return callback
+
+
+def extract_file(
+    path: Path,
+    kind: FileKind,
+    options: ExtractionOptions,
+    on_page: PageCallback | None = None,
+) -> ExtractionResult:
+    """Extract one file. ``on_page`` is called as pages are read, from worker threads."""
     if kind is FileKind.PDF:
-        return extract_pdf(path, options)
+        return extract_pdf(path, options, on_page)
     if kind is FileKind.IMAGE:
-        return extract_image(path, options)
+        return extract_image(path, options, on_page)
     raise UnsupportedFileError(f"Unsupported file kind: {kind}")
 
 
-def extract_image(path: Path, options: ExtractionOptions) -> ExtractionResult:
+def extract_image(
+    path: Path, options: ExtractionOptions, on_page: PageCallback | None = None
+) -> ExtractionResult:
     if options.ocr_language is None:
         raise ocr_engine.OcrUnavailableError(
             "Tesseract is not installed on the server, so images cannot be read."
@@ -64,11 +107,13 @@ def extract_image(path: Path, options: ExtractionOptions) -> ExtractionResult:
                     f"{ocr_engine.MAX_PIXELS // 1_000_000} megapixels."
                 )
             image.load()
+            _report(on_page, PageEvent(1, 1, Method.OCR, None))
             text = ocr_engine.ocr_image(image, options.ocr_language, timeout=options.ocr_timeout_s)
     except UnidentifiedImageError as exc:
         raise UnsupportedFileError("The file is not a readable PNG or JPEG image.") from exc
     except Image.DecompressionBombError as exc:
         raise UnsupportedFileError("The image is too large to process safely.") from exc
+    _report(on_page, PageEvent(1, 1, Method.OCR, text))
     page = PageResult(number=1, method=Method.OCR, text=text)
     result = ExtractionResult.from_pages([page], options.ocr_language)
     if not text:
@@ -76,7 +121,9 @@ def extract_image(path: Path, options: ExtractionOptions) -> ExtractionResult:
     return result
 
 
-def extract_pdf(path: Path, options: ExtractionOptions) -> ExtractionResult:
+def extract_pdf(
+    path: Path, options: ExtractionOptions, on_page: PageCallback | None = None
+) -> ExtractionResult:
     """Read the text layer page by page; OCR the pages that have none, in parallel.
 
     PDFium renders on this thread (it is not thread-safe). Tesseract runs as a separate
@@ -84,6 +131,7 @@ def extract_pdf(path: Path, options: ExtractionOptions) -> ExtractionResult:
     real parallelism. Results are put back in page order.
     """
     total = pdf_parser.page_count(path)
+    shown_total = min(total, options.max_pages) if options.max_pages else total
     deadline = time.monotonic() + options.time_limit_s if options.time_limit_s else None
     workers = max(1, options.ocr_workers)
 
@@ -111,14 +159,19 @@ def extract_pdf(path: Path, options: ExtractionOptions) -> ExtractionResult:
         for number, text, image in sources:
             if image is None:
                 slots.append((number, text))
+                _report(on_page, PageEvent(number, shown_total, Method.PDF_PARSER, text))
             elif options.ocr_language is None:
                 slots.append((number, ""))
                 no_ocr.append(number)
+                _report(on_page, PageEvent(number, shown_total, Method.OCR, ""))
             else:
                 # Rendered pages wait in memory until OCR'd: never run far ahead of Tesseract.
                 while len(in_flight) >= workers * 2:
                     in_flight.popleft().result()
+                _report(on_page, PageEvent(number, shown_total, Method.OCR, None))
                 future = pool.submit(run_ocr, image)
+                if on_page is not None:
+                    future.add_done_callback(_ocr_done(on_page, number, shown_total))
                 in_flight.append(future)
                 slots.append((number, future))
             if number >= total:

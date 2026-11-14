@@ -35,6 +35,9 @@ log = logging.getLogger(__name__)
 API_BASE = "https://www.googleapis.com/drive/v3"
 PUBLIC_FOLDER_VIEW = "https://drive.google.com/embeddedfolderview"
 PUBLIC_DOWNLOAD = "https://drive.usercontent.google.com/download"
+# Drive renders a thumbnail of any file shared publicly (first page for PDFs).
+PUBLIC_THUMBNAIL = "https://drive.google.com/thumbnail"
+THUMBNAIL_MAX_BYTES = 2 * 1024 * 1024
 
 LIST_RETRIES = 2  # extra attempts after a connection-level failure (listing and download)
 PDF_MIME = "application/pdf"
@@ -437,6 +440,27 @@ class DriveClient:
             folders_scanned=scanned,
             folders_skipped=left_out,
         )
+
+    async def thumbnail(self, file_id: str, resource_key: str | None = None) -> bytes:
+        """Drive's own thumbnail of a public file, as raw bytes (at most 2 MB)."""
+        params = {"id": file_id, "sz": "w360"}
+        if resource_key:
+            params["resourcekey"] = resource_key
+        try:
+            async with self._http.stream(
+                "GET", PUBLIC_THUMBNAIL, params=params, timeout=15
+            ) as response:
+                content_type = response.headers.get("content-type", "")
+                if response.status_code != 200 or not content_type.startswith("image/"):
+                    raise DriveError("not_found", "Drive has no thumbnail for this file.")
+                data = bytearray()
+                async for chunk in response.aiter_bytes():
+                    data += chunk
+                    if len(data) > THUMBNAIL_MAX_BYTES:
+                        raise DriveError("upstream", "The thumbnail is unexpectedly large.")
+                return bytes(data)
+        except httpx.TransportError as exc:
+            raise DriveError("upstream", f"Could not reach Google Drive: {_describe(exc)}") from exc
 
     async def download(
         self,

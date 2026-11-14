@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import secrets
 import tempfile
+import time
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
@@ -14,15 +16,29 @@ import pytesseract
 
 from app.batch.models import Batch, FileJob, FileStatus
 from app.config import Settings
-from app.drive.client import DriveClient, DriveError, DriveFile
+from app.drive.client import DriveClient, DriveError, DriveFile, FileKind
 from app.extraction import ocr as ocr_engine
-from app.extraction.models import ExtractionResult
+from app.extraction.models import ExtractionResult, Method
 from app.extraction.pdf_parser import PdfOpenError
-from app.extraction.router import ExtractionOptions, UnsupportedFileError, extract_file
+from app.extraction.preview import PagePreviewer, make_preview
+from app.extraction.router import (
+    ExtractionOptions,
+    PageEvent,
+    UnsupportedFileError,
+    extract_file,
+)
 
 log = logging.getLogger(__name__)
 
 Event = dict
+
+# Live reading view. Text-layer pages can go by at hundreds a second, and scanned pages are
+# queued for OCR several at a time, so at most one frame (a rendered page) is made per
+# FRAME_INTERVAL_S. The page events themselves are all sent.
+FRAME_INTERVAL_S = 0.2
+PAGE_PREVIEW_WIDTH = 240
+MAX_PAGE_PREVIEWS = 24  # ~15 KB each, trimmed to one when the file is finished
+EXCERPT_CHARS = 280
 
 
 class BatchNotFoundError(KeyError):
@@ -111,6 +127,8 @@ class BatchManager:
                 job.error = _describe(exc)
             finally:
                 job.finished_at = datetime.now(UTC)
+                while len(job.page_previews) > 1:  # keep only the last page shown
+                    job.page_previews.popitem(last=False)
                 self._publish(batch, {"type": "file", "file": job.to_dict(include_text=True)})
 
     async def _download_and_extract(
@@ -125,6 +143,9 @@ class BatchManager:
                 max_bytes=self._settings.max_file_size_bytes,
                 resource_key=resource_key,
             )
+            # Show the real first page while it is being read; the page swaps it in live.
+            job.preview = await asyncio.to_thread(make_preview, target, job.file.kind)
+            self._publish(batch, {"type": "file", "file": job.to_dict(include_text=False)})
             options = ExtractionOptions(
                 ocr_language=batch.ocr_language,
                 render_dpi=self._settings.ocr_render_dpi,
@@ -134,8 +155,31 @@ class BatchManager:
                 max_pages=self._settings.max_pdf_pages,
                 time_limit_s=self._settings.file_time_limit_seconds,
             )
+            previewer = (
+                PagePreviewer(target, PAGE_PREVIEW_WIDTH)
+                if job.file.kind is FileKind.PDF
+                else contextlib.nullcontext(None)
+            )
             # Extraction is CPU-bound (PDF rendering, Tesseract); keep the event loop free.
-            return await asyncio.to_thread(extract_file, target, job.file.kind, options)
+            with previewer as pages:
+                reporter = PageReporter(self, batch, job, pages, asyncio.get_running_loop())
+                return await asyncio.to_thread(
+                    extract_file, target, job.file.kind, options, reporter
+                )
+
+    def _page_reached(self, batch: Batch, job: FileJob, page: dict, image: bytes | None) -> None:
+        """On the event loop: remember the page and its frame, and tell the subscribers."""
+        if job.status is not FileStatus.PROCESSING:
+            return  # an OCR callback that lost the race with the file finishing
+        number = page["page"]
+        if image is not None:
+            job.page_previews[number] = image
+            job.page_previews.move_to_end(number)
+            while len(job.page_previews) > MAX_PAGE_PREVIEWS:
+                job.page_previews.popitem(last=False)
+        page["has_image"] = number in job.page_previews or (number == 1 and bool(job.preview))
+        job.progress = {key: page[key] for key in ("page", "total", "method", "state")}
+        self._publish(batch, {"type": "page", "file_id": job.file.id, **page})
 
     # ----- events ----------------------------------------------------------
 
@@ -163,6 +207,56 @@ class BatchManager:
                     return
         finally:
             batch.subscribers.remove(queue)
+
+
+class PageReporter:
+    """Turns page events from the extraction threads into live ``page`` events.
+
+    Called on the extraction thread (text-layer pages, OCR starting) and on OCR threads
+    (OCR finished). Frames are rendered here, off the event loop, and only on the
+    extraction thread, which is the only one that touches ``_last_frame``.
+    """
+
+    def __init__(
+        self,
+        manager: BatchManager,
+        batch: Batch,
+        job: FileJob,
+        pages: PagePreviewer | None,
+        loop: asyncio.AbstractEventLoop,
+    ) -> None:
+        self._manager = manager
+        self._batch = batch
+        self._job = job
+        self._pages = pages
+        self._loop = loop
+        self._last_frame = float("-inf")  # the first page always gets a frame
+
+    def __call__(self, event: PageEvent) -> None:
+        reading = event.text is None
+        image = None
+        if reading or event.method is Method.PDF_PARSER:  # on the extraction thread
+            now = time.monotonic()
+            last_page = event.number >= event.total
+            due = last_page or now - self._last_frame >= FRAME_INTERVAL_S
+            if not due and not reading:
+                return  # a text-layer page that went by between two frames
+            if due:
+                self._last_frame = now
+                if self._pages is not None:
+                    image = self._pages.render(event.number)
+        text = event.text or ""
+        page = {
+            "page": event.number,
+            "total": event.total,
+            "method": event.method.value,
+            "state": "reading" if reading else "read",
+            "excerpt": " ".join(text.split())[:EXCERPT_CHARS],
+            "chars": len(text),
+        }
+        self._loop.call_soon_threadsafe(
+            self._manager._page_reached, self._batch, self._job, page, image
+        )
 
 
 _USER_FACING = (

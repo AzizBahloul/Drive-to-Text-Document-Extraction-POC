@@ -2,13 +2,15 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
+from collections import OrderedDict
 from collections.abc import AsyncIterator
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse, StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 
 from app.api.schemas import (
     BatchCreated,
@@ -25,6 +27,7 @@ from app.drive.client import DriveClient, FolderListing
 from app.drive.errors import DriveError
 from app.drive.links import parse_folder_link
 from app.extraction import ocr as ocr_engine
+from app.extraction.preview import reencode_thumbnail
 
 log = logging.getLogger(__name__)
 router = APIRouter(prefix="/api")
@@ -49,9 +52,39 @@ BATCH_ERRORS: dict[int | str, dict] = {
     429: {"model": DetailResponse, "description": "Too many batches are already running."},
     503: {"model": DetailResponse, "description": "OCR is unavailable on the server."},
 }
+NO_IMAGE: dict[int | str, dict] = {
+    200: {"content": {"image/jpeg": {}}, "description": "A JPEG image."},
+    404: {"model": DetailResponse, "description": "No image for this file."},
+}
 UNKNOWN_BATCH: dict[int | str, dict] = {
     404: {"model": DetailResponse, "description": "No batch with this id (or it expired)."}
 }
+
+
+class ThumbnailCache:
+    """The most recent Drive thumbnails, re-encoded; misses are fetched four at a time."""
+
+    def __init__(self, size: int = 300) -> None:
+        self.size = size
+        self.items: OrderedDict[str, bytes | None] = OrderedDict()
+        self.fetching = asyncio.Semaphore(4)
+
+    def get(self, file_id: str) -> tuple[bool, bytes | None]:
+        if file_id not in self.items:
+            return False, None
+        self.items.move_to_end(file_id)
+        return True, self.items[file_id]
+
+    def put(self, file_id: str, image: bytes | None) -> None:
+        self.items[file_id] = image
+        self.items.move_to_end(file_id)
+        while len(self.items) > self.size:
+            self.items.popitem(last=False)
+
+
+def image_response(data: bytes) -> Response:
+    headers = {"Cache-Control": "private, max-age=3600"}
+    return Response(data, media_type="image/jpeg", headers=headers)
 
 
 def get_drive(request: Request) -> DriveClient:
@@ -121,6 +154,36 @@ async def resolve_folder(
     )
 
 
+@router.get(
+    "/folders/{folder_id}/files/{file_id}/thumbnail",
+    response_class=Response,
+    responses=NO_IMAGE,
+)
+async def file_thumbnail(
+    folder_id: str, file_id: str, request: Request, drive: Drive, listings: Listings
+) -> Response:
+    """Drive's thumbnail of a listed file, fetched by the server and re-encoded as JPEG."""
+    # Only files of a folder this server listed: the route is not a proxy for any Drive id.
+    listing, resource_key = listings.get(folder_id, (None, None))
+    if listing is None or not any(file.id == file_id for file in listing.files):
+        raise HTTPException(404, "List the folder first; this file is not in it.")
+    cache: ThumbnailCache = request.app.state.thumbnails
+    found, image = cache.get(file_id)
+    if not found:
+        async with cache.fetching:
+            try:
+                image = reencode_thumbnail(await drive.thumbnail(file_id, resource_key))
+                cache.put(file_id, image)
+            except DriveError as exc:
+                log.info("No thumbnail for %s: %s", file_id, exc.message)
+                image = None
+                if exc.kind == "not_found":  # a dropped connection is worth another try
+                    cache.put(file_id, None)
+    if image is None:
+        raise HTTPException(404, "Drive has no thumbnail for this file.")
+    return image_response(image)
+
+
 @router.post("/batches", response_model=BatchCreated, status_code=202, responses=BATCH_ERRORS)
 async def create_batch(
     body: BatchRequest,
@@ -187,6 +250,41 @@ async def batch_events(batch_id: str, manager: Manager):
         media_type="text/event-stream",
         headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
     )
+
+
+@router.get(
+    "/batches/{batch_id}/files/{file_id}/preview",
+    response_class=Response,
+    responses={**NO_IMAGE, **UNKNOWN_BATCH},
+)
+async def file_preview(batch_id: str, file_id: str, manager: Manager) -> Response:
+    """The first page of a file as the server rendered it after downloading it."""
+    try:
+        job = manager.get(batch_id).jobs.get(file_id)
+    except BatchNotFoundError:
+        raise HTTPException(404, "Unknown batch.") from None
+    if job is None or job.preview is None:
+        raise HTTPException(404, "No preview for this file yet.")
+    return image_response(job.preview)
+
+
+@router.get(
+    "/batches/{batch_id}/files/{file_id}/pages/{page}/preview",
+    response_class=Response,
+    responses={**NO_IMAGE, **UNKNOWN_BATCH},
+)
+async def page_preview(batch_id: str, file_id: str, page: int, manager: Manager) -> Response:
+    """A recent page as the server rendered it while reading the file (live view)."""
+    try:
+        job = manager.get(batch_id).jobs.get(file_id)
+    except BatchNotFoundError:
+        raise HTTPException(404, "Unknown batch.") from None
+    image = job.page_previews.get(page) if job else None
+    if image is None and job is not None and page == 1:
+        image = job.preview
+    if image is None:
+        raise HTTPException(404, "That page is no longer available.")
+    return image_response(image)
 
 
 @router.get("/batches/{batch_id}/export", responses=UNKNOWN_BATCH)

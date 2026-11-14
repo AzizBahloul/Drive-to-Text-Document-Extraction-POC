@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+from collections import OrderedDict
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -36,6 +37,10 @@ class FileJob:
     started_at: datetime | None = None
     finished_at: datetime | None = None
     downloaded_bytes: int | None = None
+    preview: bytes | None = field(default=None, repr=False)  # JPEG of page 1
+    # Live reading: the page reached last, and JPEGs of the most recent pages shown.
+    progress: dict | None = None
+    page_previews: OrderedDict[int, bytes] = field(default_factory=OrderedDict, repr=False)
 
     @property
     def duration_ms(self) -> int | None:
@@ -55,6 +60,8 @@ class FileJob:
             "error": self.error,
             "duration_ms": self.duration_ms,
             "downloaded_bytes": self.downloaded_bytes,
+            "has_preview": self.preview is not None,
+            "progress": dict(self.progress) if self.progress else None,
         }
         if include_text:
             payload["text"] = self.result.text if self.result else ""

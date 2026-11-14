@@ -738,12 +738,13 @@ a:hover { color: var(--blue-deep); }
 .job-row {
   position: relative;
   display: grid;
-  grid-template-columns: 22px 104px minmax(0, 1fr) auto auto;
+  grid-template-columns: 34px 112px minmax(0, 1fr) auto auto;
   grid-template-areas:
     "page status name stamp meta"
     "page status snippet snippet snippet"
-    "page status error error error";
-  grid-template-rows: minmax(31px, auto); /* the page's height, so a lone name centres on it */
+    "page status error error error"
+    "live live live live live";
+  grid-template-rows: minmax(47px, auto); /* the page's height, so a lone name centres on it */
   align-items: center;
   gap: 0 16px;
   padding: 12px 14px;
@@ -783,19 +784,21 @@ a:hover { color: var(--blue-deep); }
   to { opacity: 1; clip-path: inset(0 0 0 0); }
 }
 
-/* The page of each file: faint while waiting, lines written while the server reads it
-   (plus a scan beam for images, which always go through OCR), settled when done. */
+/* The page of each file: its real thumbnail from Drive, swapped for the first page the
+   server rendered once the file is downloaded. Grey while waiting, pulsing while it
+   downloads, swept by a scan beam while it is read, outlined green when done. Drawn lines
+   stand in when no image is available. */
 .job-page {
   grid-area: page;
   position: relative;
   display: flex;
   flex-direction: column;
-  gap: 3px;
-  width: 22px;
-  height: 28px;
-  padding: 5px 4px 0;
+  gap: 4px;
+  width: 34px;
+  height: 44px;
+  padding: 7px 6px 0;
   border: 1.5px solid var(--rule-strong);
-  border-radius: 2px 6px 2px 2px;
+  border-radius: 2px 7px 2px 2px;
   background: var(--sheet);
   overflow: hidden;
   transition: border-color var(--t-base);
@@ -804,16 +807,28 @@ a:hover { color: var(--blue-deep); }
 .job-page i:nth-child(2) { width: 75%; }
 .job-page i:nth-child(4) { width: 90%; }
 .job-page i:nth-child(5) { width: 55%; }
-.job-beam {
+.job-page-img,
+.file-thumb img {
   position: absolute;
-  left: 0;
-  right: 0;
-  top: 0;
-  height: 8px;
-  border-bottom: 1.5px solid var(--blue);
-  background: linear-gradient(to bottom, transparent, color-mix(in srgb, var(--blue) 40%, transparent));
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: top center;
   opacity: 0;
-  transform: translateY(-10px);
+  transition: opacity var(--t-base) var(--ease-out);
+}
+.has-image > img { opacity: 1; }
+.job-row[data-status="pending"] .job-page.has-image > img { opacity: 0.5; filter: grayscale(1); }
+.job-beam,
+.live-beam {
+  position: absolute;
+  inset: 0;
+  border-bottom: 2px solid var(--blue);
+  background: linear-gradient(to bottom, transparent 35%, color-mix(in srgb, var(--blue) 26%, transparent));
+  opacity: 0;
+  transform: translateY(-100%);
+  pointer-events: none;
 }
 .job-row[data-status="processing"] .job-page { border-color: var(--blue); }
 .job-row[data-status="processing"] .job-page i { background: var(--blue); animation: page-write 1.6s var(--ease-out) infinite; }
@@ -821,18 +836,160 @@ a:hover { color: var(--blue-deep); }
 .job-row[data-status="processing"] .job-page i:nth-child(3) { animation-delay: 0.24s; }
 .job-row[data-status="processing"] .job-page i:nth-child(4) { animation-delay: 0.36s; }
 .job-row[data-status="processing"] .job-page i:nth-child(5) { animation-delay: 0.48s; }
-.job-row[data-status="processing"][data-kind="image"] .job-beam { opacity: 1; animation: page-beam 1.4s var(--ease-in-out) infinite alternate; }
+.job-row[data-status="processing"] .job-page.has-image i { animation: none; }
+.job-row[data-phase="download"] .job-page.has-image > img { animation: page-fetch 0.9s ease-in-out infinite alternate; }
+.job-row[data-phase="read"] .job-beam { animation: page-beam 1.6s linear infinite; }
 .job-row[data-status="done"] .job-page { border-color: var(--ok); animation: page-settle var(--t-base) var(--ease-out); }
 .job-row[data-status="done"] .job-page i { background: var(--ink-2); opacity: 0.75; }
 .job-row[data-status="failed"] .job-page { border-color: var(--bad); }
 .job-row[data-status="failed"] .job-page i { opacity: 0.15; }
+.job-row[data-status="failed"] .job-page > img { opacity: 0.35; }
 @keyframes page-write {
   0% { opacity: 1; transform: scaleX(0); }
   30%, 78% { opacity: 1; transform: scaleX(1); }
   100% { opacity: 0.25; transform: scaleX(1); }
 }
-@keyframes page-beam { from { transform: translateY(-8px); } to { transform: translateY(26px); } }
+@keyframes page-beam {
+  0% { opacity: 1; transform: translateY(-100%); }
+  88% { opacity: 1; transform: translateY(0); }
+  100% { opacity: 0; transform: translateY(0); }
+}
+@keyframes page-fetch { from { opacity: 0.45; } to { opacity: 1; } }
 @keyframes page-settle { from { transform: scale(0.9); } }
+
+/* Live reading: while a file is processed its row opens onto the page the server is
+   reading right now (rendered from the downloaded file), with that page's text. Pages are
+   laid on the stack as they go by; the row folds back when the file is finished. */
+.job-live {
+  grid-area: live;
+  display: grid;
+  grid-template-rows: 0fr;
+  opacity: 0;
+  transition: grid-template-rows var(--t-slow) var(--ease-in-out), opacity var(--t-base) var(--ease-out);
+}
+.job-row.is-live .job-live { grid-template-rows: 1fr; opacity: 1; }
+.job-live-inner {
+  display: grid;
+  grid-template-columns: 76px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+  min-height: 0;
+  padding-left: 50px; /* under the status column: the 34px page plus the 16px gap */
+  overflow: hidden;
+}
+.live-page {
+  position: relative;
+  margin: 14px 4px 8px 0;
+  aspect-ratio: 8.5 / 11;
+  border: 1.5px solid var(--blue);
+  border-radius: 2px;
+  background: repeating-linear-gradient(to bottom, var(--rule) 0 2px, transparent 2px 8px) 9px 12px / calc(100% - 18px) calc(100% - 24px) no-repeat, var(--sheet);
+  box-shadow: 3px 3px 0 -1.5px var(--sheet), 3px 3px 0 0 var(--rule-strong); /* the pages beneath */
+  transition: border-color var(--t-base);
+}
+.live-img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  background: var(--sheet);
+  animation: page-lay 260ms var(--ease-out) both;
+}
+@keyframes page-lay { from { opacity: 0; transform: translateY(-7%) scale(0.97); } }
+.live-beam { z-index: 1; }
+.job-row.is-live[data-status="processing"] .live-beam { animation: page-beam 1.4s linear infinite; }
+.job-row[data-status="done"] .live-page { border-color: var(--ok); }
+.job-row[data-status="failed"] .live-page { border-color: var(--bad); }
+.live-read { min-width: 0; }
+.live-count {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 2px 12px;
+  margin: 14px 0 8px;
+  font-size: 14px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  color: var(--blue);
+}
+.live-method { font-size: 13px; font-weight: 500; color: var(--ink-3); }
+.live-bar { display: block; height: 3px; margin-bottom: 10px; border-radius: 2px; background: var(--rule); overflow: hidden; }
+.live-bar i {
+  display: block;
+  height: 100%;
+  background: var(--blue);
+  transform: scaleX(0);
+  transform-origin: left center;
+  transition: transform var(--t-base) var(--ease-out);
+}
+.job-row[data-status="done"] .live-count { color: var(--ok); }
+.job-row[data-status="done"] .live-bar i { background: var(--ok); }
+.live-text {
+  display: -webkit-box;
+  min-height: calc(1.5em * 3);
+  margin: 0 0 8px;
+  overflow: hidden;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 3;
+  line-clamp: 3;
+  font-family: var(--font-read);
+  font-size: 15px;
+  line-height: 1.5;
+  color: var(--ink-2);
+  overflow-wrap: anywhere;
+}
+/* No text yet (downloading, or OCR still reading the page): bars where it will appear. */
+.job-live:not([data-state="read"]) .live-text {
+  background: linear-gradient(var(--rule), var(--rule)) 0 0.45em / 94% 0.55em no-repeat,
+    linear-gradient(var(--rule), var(--rule)) 0 1.95em / 80% 0.55em no-repeat,
+    linear-gradient(var(--rule), var(--rule)) 0 3.45em / 58% 0.55em no-repeat;
+  animation: page-fetch 0.9s ease-in-out infinite alternate;
+}
+.live-text.is-new { animation: snippet-wipe 420ms var(--ease-out) both; }
+
+/* When the batch is finished the list folds away and the results take its place. */
+.job-fold {
+  display: grid;
+  grid-template-rows: 1fr;
+  transition: grid-template-rows var(--t-slow) var(--ease-in-out), opacity var(--t-base) var(--ease-out);
+}
+.job-fold-inner { min-height: 0; }
+.job-fold.is-folded { grid-template-rows: 0fr; opacity: 0; }
+.job-fold.is-folded .job-fold-inner { overflow: hidden; }
+
+/* Step 2: each file's real thumbnail, scanned in from the top as it arrives. */
+.file-thumb {
+  position: relative;
+  flex: none;
+  width: 30px;
+  height: 38px;
+  border: 1px solid var(--rule-strong);
+  border-radius: 2px 6px 2px 2px;
+  background: repeating-linear-gradient(to bottom, var(--rule) 0 1.5px, transparent 1.5px 5px) 5px 7px / calc(100% - 10px) calc(100% - 12px) no-repeat, var(--sheet);
+  overflow: hidden;
+}
+.file-thumb.has-image img { animation: thumb-scan-in 560ms var(--ease-out) both; }
+.file-thumb.has-image::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  top: 0;
+  height: 2px;
+  background: var(--blue);
+  opacity: 0;
+  animation: thumb-beam 560ms var(--ease-out);
+}
+@keyframes thumb-scan-in {
+  from { clip-path: inset(0 0 100% 0); }
+  to { clip-path: inset(0 0 0 0); }
+}
+@keyframes thumb-beam {
+  from { opacity: 1; transform: translateY(0); }
+  85% { opacity: 1; }
+  to { opacity: 0; transform: translateY(36px); }
+}
 
 /* stamps */
 
@@ -953,8 +1110,9 @@ a:hover { color: var(--blue-deep); }
   .link-field .button { width: 100%; }
   .file-row { grid-template-columns: minmax(0, 1fr) auto; }
   .file-size { display: none; }
-  .job-row { grid-template-columns: 22px minmax(0, 1fr) auto; grid-template-areas: "page status meta" "page name name" "page stamp stamp" "page snippet snippet" "page error error"; }
+  .job-row { grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-areas: "page status meta" "page name name" "page stamp stamp" "page snippet snippet" "page error error" "live live live"; }
   .fetch-art { transform: scale(0.8); transform-origin: left center; margin-right: -35px; }
+  .job-live-inner { grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-left: 0; }
   .run-action { align-items: stretch; width: 100%; }
   .stage-actions { width: 100%; }
   .stage-actions .button { flex: 1; }
@@ -969,7 +1127,7 @@ a:hover { color: var(--blue-deep); }
   .splash { display: none; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
   .file-row, .sheet { opacity: 1; transform: none; }
-  .fetch-sheet, .job-beam { display: none; }
+  .fetch-sheet, .job-beam, .live-beam, .file-thumb::after { display: none; }
   .fetch-slot::after { animation: none; transform: scaleX(0.6); }
   .job-row[data-status="processing"] .job-page i { animation: none; opacity: 1; }
 }

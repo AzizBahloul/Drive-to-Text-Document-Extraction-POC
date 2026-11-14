@@ -15,7 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
-from app.api.routes import drive_error_response, router
+from app.api.routes import ThumbnailCache, drive_error_response, router
 from app.batch.manager import BatchManager
 from app.config import Settings, get_settings
 from app.drive.client import DriveClient
@@ -53,6 +53,7 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
         app.state.drive = drive or DriveClient(http, settings.google_api_key)
         app.state.batches = BatchManager(app.state.drive, settings)
         app.state.listings = {}
+        app.state.thumbnails = ThumbnailCache()
         logging.getLogger(__name__).info(
             "Drive mode: %s; OCR languages: %s",
             app.state.drive.mode,

@@ -52,6 +52,7 @@ const el = {
   progress: $("progress"),
   progressFill: $("progressFill"),
   jobList: $("jobList"),
+  jobFold: $("jobFold"),
   resultsTitle: $("resultsTitle"),
   resultsSummary: $("resultsSummary"),
   exportLink: $("exportLink"),
@@ -305,6 +306,7 @@ function renderFiles() {
     checkbox.setAttribute("aria-label", `Select ${filePath(file)}`);
     checkbox.addEventListener("change", () => toggleFile(file.id, checkbox.checked));
     node.querySelector(".file-name-text").textContent = file.name;
+    loadInto(node.querySelector(".file-thumb img"), thumbUrl(file));
     const where = node.querySelector(".file-folder");
     where.textContent = file.folder ? `${file.folder.replaceAll("/", " / ")} / ` : "";
     where.hidden = !file.folder;
@@ -438,6 +440,8 @@ function startBatch(batchId) {
   state.jobs = new Map();
   closeStagesAfter("files");
   el.jobList.replaceChildren();
+  resetLive();
+  el.jobFold.classList.remove("is-folded");
   el.batchTitle.textContent = "Extracting";
   el.batchSummary.textContent = "Starting the batch";
   el.progress.classList.remove("is-finished", "has-failures");
@@ -457,6 +461,7 @@ function startBatch(batchId) {
   state.eventSource = source;
   source.addEventListener("snapshot", (event) => applySnapshot(JSON.parse(event.data)));
   source.addEventListener("file", (event) => applyJob(JSON.parse(event.data).file));
+  source.addEventListener("page", (event) => applyPage(JSON.parse(event.data)));
   source.addEventListener("batch", (event) => finishBatch(JSON.parse(event.data)));
   source.onerror = () => {
     if (state.batch?.status === "running") {
@@ -497,6 +502,7 @@ function renderJob(job) {
   node.dataset.id = job.id;
   node.dataset.kind = job.kind;
   node.querySelector(".job-name").textContent = filePath(job);
+  loadInto(node.querySelector(".job-page-img"), thumbUrl(job));
   updateJobNode(node, job);
   return node;
 }
@@ -506,14 +512,27 @@ function applyJob(job) {
   const merged = { ...previous, ...job };
   state.jobs.set(job.id, merged);
   const node = el.jobList.querySelector(`[data-id="${CSS.escape(job.id)}"]`);
-  if (node) updateJobNode(node, merged, previous.status);
+  if (node) {
+    updateJobNode(node, merged, previous.status);
+    liveUpdate(node, merged);
+  }
   updateBatchSummary();
 }
 
 function updateJobNode(node, job, previousStatus) {
   node.dataset.status = job.status;
   const labels = { pending: "Pending", processing: "Processing", done: "Done", failed: "Failed" };
+  // The server announces the download finishing (with the first page) before reading starts.
+  const phase = job.status !== "processing" ? "" : job.downloaded_bytes == null ? "download" : "read";
+  node.dataset.phase = phase;
+  if (phase) labels.processing = phase === "download" ? "Downloading" : "Reading";
   node.querySelector(".job-status-text").textContent = labels[job.status] || job.status;
+
+  const pageImg = node.querySelector(".job-page-img");
+  if (job.has_preview && pageImg.dataset.source !== "preview") {
+    pageImg.dataset.source = "preview";
+    loadInto(pageImg, previewUrl(job));
+  }
 
   const stamp = node.querySelector(".job-stamp");
   if (job.method) {
@@ -549,6 +568,34 @@ function updateJobNode(node, job, previousStatus) {
   error.hidden = !job.error;
 }
 
+/* ------------------------------------------------------------------ real page images */
+
+// Drive's thumbnail of a listed file, fetched and re-encoded by the server.
+function thumbUrl(file) {
+  const folder = encodeURIComponent(state.folder?.folder_id || "");
+  return `/api/folders/${folder}/files/${encodeURIComponent(file.id)}/thumbnail`;
+}
+
+// The first page as the server rendered it from the downloaded file.
+function previewUrl(job) {
+  const batch = encodeURIComponent(state.batch?.batch_id || "");
+  return `/api/batches/${batch}/files/${encodeURIComponent(job.id)}/preview`;
+}
+
+// Load a real page image into its frame; the frame keeps its drawn lines until it arrives.
+function loadInto(img, url) {
+  const frame = img.parentElement;
+  img.onload = () => {
+    frame.classList.remove("is-missing");
+    frame.classList.add("has-image");
+  };
+  img.onerror = () => {
+    frame.classList.remove("has-image");
+    frame.classList.add("is-missing");
+  };
+  img.src = url;
+}
+
 function snippetOf(text) {
   return (text || "").replace(/\s+/g, " ").trim().slice(0, 160);
 }
@@ -580,14 +627,18 @@ function finishBatch(batch) {
   el.batchSummary.textContent =
     failed === 0
       ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
-      : `${done} of ${total} extracted, ${plural(failed, "file")} failed. Details are listed below.`;
+      : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
   el.progress.classList.add("is-finished");
   el.progress.classList.toggle("has-failures", failed > 0);
   renderResults(batch);
-  setTimeout(() => {
-    openStage("results");
-    focusHeading(el.resultsTitle);
-  }, 350);
+  // Let the last files finish on screen, fold the list away, and put the results in its place.
+  afterLive(() => {
+    el.jobFold.classList.add("is-folded");
+    setTimeout(() => {
+      openStage("results");
+      focusHeading(el.resultsTitle);
+    }, REDUCED_MOTION ? 0 : LIVE_FOLD_MS);
+  });
 }
 
 /* ------------------------------------------------------------------ stage 4: results */
@@ -734,6 +785,161 @@ el.restartButton.addEventListener("click", () => {
   openStage("link");
   setTimeout(() => el.linkInput.focus(), 400);
 });
+
+/* ------------------------------------------------------------------ live reading */
+/* While a file is processed its row opens onto what the server is reading right now: the
+   real page as rendered from the downloaded file, "Page 37 of 1,015", and the text that came
+   off that page. Frames come from `page` events. Each stays up at least FRAME_MIN_MS so fast
+   text-layer PDFs stay legible, and a row stays open at least LIVE_MIN_MS before it folds
+   back once its file is finished. */
+
+const FRAME_MIN_MS = 180;
+const LIVE_MIN_MS = 900;
+const LIVE_FOLD_MS = 520; // --t-slow, the fold transition
+const live = new Map();
+
+function resetLive() {
+  live.forEach((view) => clearTimeout(view.timer));
+  live.clear();
+}
+
+function rowFor(id) {
+  return el.jobList.querySelector(`[data-id="${CSS.escape(id)}"]`);
+}
+
+function liveView(id) {
+  if (!live.has(id)) {
+    live.set(id, {
+      openedAt: performance.now(),
+      shownAt: 0,
+      page: 0,
+      pending: null,
+      timer: null,
+      finishing: false,
+      closed: false,
+      imgSeq: 0,
+      imgShown: 0,
+    });
+  }
+  return live.get(id);
+}
+
+function liveUpdate(node, job) {
+  if (job.status === "processing") {
+    const view = liveView(job.id);
+    if (view.closed) return;
+    if (!node.classList.contains("is-live")) {
+      node.classList.add("is-live");
+      setLiveImage(node, view, thumbUrl(job));
+    }
+    if (!view.page) {
+      const where = node.querySelector(".live-where");
+      if (job.downloaded_bytes == null) {
+        where.textContent = "Downloading from Drive";
+      } else {
+        where.textContent = `Downloaded ${formatBytes(job.downloaded_bytes)}, opening it`;
+        if (job.has_preview) setLiveImage(node, view, previewUrl(job));
+      }
+      if (job.progress) queueFrame(job.id, { ...job.progress, has_image: false, excerpt: "" });
+    }
+  } else if (live.has(job.id) && (job.status === "done" || job.status === "failed")) {
+    const view = live.get(job.id);
+    view.finishing = true;
+    tick(job.id);
+  }
+}
+
+function applyPage(event) {
+  const job = state.jobs.get(event.file_id);
+  if (!job || job.status !== "processing") return; // a late page after the file finished
+  job.progress = event;
+  queueFrame(event.file_id, event);
+}
+
+function queueFrame(id, frame) {
+  const view = liveView(id);
+  view.pending = frame; // only the newest frame waits; the ones it replaces were never due
+  tick(id);
+}
+
+// Show the waiting frame when the current one has had its moment; fold the row when done.
+function tick(id) {
+  const view = live.get(id);
+  if (!view || view.closed) return;
+  clearTimeout(view.timer);
+  view.timer = null;
+  const node = rowFor(id);
+  if (!node) return;
+  let now = performance.now();
+  if (view.pending && now >= view.shownAt + FRAME_MIN_MS) {
+    showFrame(node, view, view.pending);
+    view.pending = null;
+    now = performance.now();
+  }
+  let next = view.pending ? view.shownAt + FRAME_MIN_MS : 0;
+  if (!view.pending && view.finishing) {
+    const ready = Math.max(view.openedAt + LIVE_MIN_MS, view.shownAt + FRAME_MIN_MS);
+    if (now >= ready) {
+      view.closed = true;
+      node.classList.remove("is-live");
+      return;
+    }
+    next = ready;
+  }
+  if (next) view.timer = setTimeout(() => tick(id), Math.max(0, next - now));
+}
+
+function showFrame(node, view, frame) {
+  view.shownAt = performance.now();
+  const box = node.querySelector(".job-live");
+  if (frame.has_image && frame.page !== view.page) setLiveImage(node, view, pageUrl(node.dataset.id, frame.page));
+  view.page = frame.page;
+  box.dataset.state = frame.state;
+  node.querySelector(".live-where").textContent = `Page ${formatCount(frame.page)} of ${formatCount(frame.total)}`;
+  node.querySelector(".live-method").textContent =
+    frame.method === "ocr" ? (frame.state === "reading" ? "OCR, reading the scan" : "OCR") : "Text layer";
+  node.querySelector(".live-bar i").style.transform = `scaleX(${Math.min(1, frame.page / Math.max(frame.total, 1))})`;
+  const text = node.querySelector(".live-text");
+  if (frame.state === "reading") {
+    text.textContent = "";
+    return;
+  }
+  text.textContent = frame.excerpt || "No text on this page.";
+  text.classList.remove("is-new");
+  void text.offsetWidth; // restart the wipe for every new page
+  text.classList.add("is-new");
+}
+
+// Lay a new page on top once it has loaded; a slower, older page never covers a newer one.
+function setLiveImage(node, view, url) {
+  const frame = node.querySelector(".live-page");
+  const seq = ++view.imgSeq;
+  const img = document.createElement("img");
+  img.className = "live-img";
+  img.alt = "";
+  img.decoding = "async";
+  img.onload = () => {
+    if (seq < view.imgShown || !frame.isConnected) return;
+    view.imgShown = seq;
+    const pages = frame.querySelectorAll(".live-img");
+    for (let i = 0; i < pages.length - 1; i += 1) pages[i].remove(); // keep one beneath
+    frame.insertBefore(img, frame.querySelector(".live-beam"));
+    frame.classList.add("has-image");
+  };
+  img.src = url;
+}
+
+function pageUrl(id, page) {
+  const batch = encodeURIComponent(state.batch?.batch_id || "");
+  return `/api/batches/${batch}/files/${encodeURIComponent(id)}/pages/${page}/preview`;
+}
+
+// Run once every open row has folded back (or after a few seconds, whatever happens).
+function afterLive(callback, batchId = state.batch?.batch_id, deadline = performance.now() + 5000) {
+  if (state.batch?.batch_id !== batchId) return; // a new batch started meanwhile
+  if ([...live.values()].every((view) => view.closed) || performance.now() > deadline) callback();
+  else setTimeout(() => afterLive(callback, batchId, deadline), 120);
+}
 
 /* ------------------------------------------------------------------ spine follows scroll */
 

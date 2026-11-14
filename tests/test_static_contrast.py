@@ -120,26 +120,20 @@ def _keyframes(name: str) -> str:
 
 def test_loader_and_stage_motion_animate_only_compositor_properties() -> None:
     # transform and opacity skip layout and paint; anything else would repaint every frame.
-    for name in (
-        "read",
-        "stage-rise",
-        "badge-in",
-        "fetch-fly",
-        "fetch-fill",
-        "page-write",
-        "page-beam",
-        "page-settle",
-    ):
+    names = ("read", "stage-rise", "badge-in", "fetch-fly", "fetch-fill", "page-write")
+    names += ("page-beam", "page-fetch", "page-settle", "thumb-beam", "page-lay")
+    for name in names:
         props = set(re.findall(r"([a-z-]+)\s*:", _keyframes(name)))
         assert props <= {"transform", "opacity"}, f"@keyframes {name} animates {props}"
     # clip-path is composited too; the snippet reveal wipes the first words in with it.
-    props = set(re.findall(r"([a-z-]+)\s*:", _keyframes("snippet-wipe")))
-    assert props <= {"clip-path", "opacity"}
+    for name in ("snippet-wipe", "thumb-scan-in"):
+        props = set(re.findall(r"([a-z-]+)\s*:", _keyframes(name)))
+        assert props <= {"clip-path", "opacity"}, f"@keyframes {name} animates {props}"
 
 
 def test_reduced_motion_stops_the_fetch_and_reading_loops() -> None:
     reduced = CSS[CSS.index("@media (prefers-reduced-motion: reduce)") :]
-    assert ".fetch-sheet, .job-beam { display: none; }" in reduced
+    assert ".fetch-sheet, .job-beam, .live-beam, .file-thumb::after { display: none; }" in reduced
     assert '.job-row[data-status="processing"] .job-page i { animation: none;' in reduced
 
 
