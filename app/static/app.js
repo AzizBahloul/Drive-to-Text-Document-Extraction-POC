@@ -33,6 +33,7 @@ const el = {
   linkInput: $("linkInput"),
   linkSubmit: $("linkSubmit"),
   linkError: $("linkError"),
+  fetching: $("fetching"),
   filesTitle: $("filesTitle"),
   folderSummary: $("folderSummary"),
   folderLink: $("folderLink"),
@@ -239,6 +240,7 @@ el.linkForm.addEventListener("submit", async (event) => {
   }
   setBusy(el.linkSubmit, true);
   el.linkField.classList.add("is-busy");
+  el.fetching.hidden = false;
   closeStagesAfter("link");
   stopBatchStream();
   try {
@@ -254,6 +256,7 @@ el.linkForm.addEventListener("submit", async (event) => {
   } finally {
     setBusy(el.linkSubmit, false);
     el.linkField.classList.remove("is-busy");
+    el.fetching.hidden = true;
   }
 });
 
@@ -492,6 +495,7 @@ function applySnapshot(snapshot) {
 function renderJob(job) {
   const node = tpl.job.content.firstElementChild.cloneNode(true);
   node.dataset.id = job.id;
+  node.dataset.kind = job.kind;
   node.querySelector(".job-name").textContent = filePath(job);
   updateJobNode(node, job);
   return node;
@@ -529,9 +533,24 @@ function updateJobNode(node, job, previousStatus) {
   if (job.duration_ms != null) meta.push(formatDuration(job.duration_ms));
   node.querySelector(".job-meta").textContent = meta.join(", ");
 
+  // The first words actually read from the file, wiped in when it finishes live.
+  const snippet = node.querySelector(".job-snippet");
+  const preview = job.status === "done" ? snippetOf(job.text) : "";
+  if (preview && snippet.hidden) {
+    snippet.textContent = preview;
+    snippet.classList.toggle("is-revealing", Boolean(previousStatus) && previousStatus !== "done");
+    snippet.hidden = false;
+  } else if (!preview) {
+    snippet.hidden = true;
+  }
+
   const error = node.querySelector(".job-error");
   error.textContent = job.error || "";
   error.hidden = !job.error;
+}
+
+function snippetOf(text) {
+  return (text || "").replace(/\s+/g, " ").trim().slice(0, 160);
 }
 
 function setProgress(percent) {

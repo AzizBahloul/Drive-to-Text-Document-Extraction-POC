@@ -85,6 +85,19 @@
           </div>
           <p class="field-error" id="linkError" role="alert" hidden></p>
           <p class="field-hint" id="linkHint">The folder must be shared as "Anyone with the link". Documents in its subfolders are listed too.</p>
+          <div class="fetching" id="fetching" hidden>
+            <div class="fetch-art" aria-hidden="true">
+              <span class="fetch-folder"></span>
+              <span class="fetch-sheet"></span>
+              <span class="fetch-sheet"></span>
+              <span class="fetch-sheet"></span>
+              <span class="fetch-folder-front"></span>
+              <span class="fetch-slot"></span>
+              <span class="fetch-slot"></span>
+              <span class="fetch-slot"></span>
+            </div>
+            <p class="fetch-text" role="status">Reading the folder on Drive</p>
+          </div>
         </form>
       </div>
     </section>
@@ -183,12 +196,13 @@
 
 <template id="tpl-job">
   <li class="job-row" data-status="pending">
+    <span class="job-page" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i><b class="job-beam"></b></span>
     <span class="job-status"><span class="job-dot" aria-hidden="true"></span><span class="job-status-text">Pending</span></span>
     <span class="job-name"></span>
     <span class="job-stamp" hidden></span>
     <span class="job-meta"></span>
+    <p class="job-snippet" hidden></p>
     <p class="job-error" hidden></p>
-    <span class="job-scan" aria-hidden="true"></span>
   </li>
 </template>
 

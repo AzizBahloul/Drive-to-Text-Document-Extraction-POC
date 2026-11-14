@@ -120,9 +120,33 @@ def _keyframes(name: str) -> str:
 
 def test_loader_and_stage_motion_animate_only_compositor_properties() -> None:
     # transform and opacity skip layout and paint; anything else would repaint every frame.
-    for name in ("read", "stage-rise", "badge-in"):
+    for name in (
+        "read",
+        "stage-rise",
+        "badge-in",
+        "fetch-fly",
+        "fetch-fill",
+        "page-write",
+        "page-beam",
+        "page-settle",
+    ):
         props = set(re.findall(r"([a-z-]+)\s*:", _keyframes(name)))
         assert props <= {"transform", "opacity"}, f"@keyframes {name} animates {props}"
+    # clip-path is composited too; the snippet reveal wipes the first words in with it.
+    props = set(re.findall(r"([a-z-]+)\s*:", _keyframes("snippet-wipe")))
+    assert props <= {"clip-path", "opacity"}
+
+
+def test_reduced_motion_stops_the_fetch_and_reading_loops() -> None:
+    reduced = CSS[CSS.index("@media (prefers-reduced-motion: reduce)") :]
+    assert ".fetch-sheet, .job-beam { display: none; }" in reduced
+    assert '.job-row[data-status="processing"] .job-page i { animation: none;' in reduced
+
+
+def test_no_inline_style_attributes() -> None:
+    # The CSP allows only stylesheet files (style-src 'self'), so style="" would be dropped.
+    for page in ("index.html", "404.html", "docs.html"):
+        assert not re.search(r"\sstyle=", (STATIC / page).read_text()), page
 
 
 def test_no_yellow_highlighter_in_the_interface() -> None:
