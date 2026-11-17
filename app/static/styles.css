@@ -618,6 +618,65 @@ a:hover { color: var(--blue-deep); }
   margin-bottom: 8px;
   border-bottom: 1px solid var(--rule);
 }
+.files-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  max-width: 460px;
+}
+.search-input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color var(--t-fast);
+}
+.search-input:focus {
+  border-color: var(--blue);
+}
+.filter-chips {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--rule);
+  padding: 2px;
+  border-radius: 6px;
+}
+.filter-chip {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.filter-chip:hover {
+  color: var(--ink);
+}
+.filter-chip.is-active {
+  background: var(--sheet);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.batch-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.export-group {
+  display: inline-flex;
+  gap: 4px;
+}
 .selection-count { margin: 0; color: var(--ink-2); font-size: 15px; }
 .selection-count strong { display: inline-block; color: var(--ink); font-weight: 700; min-width: 1.2ch; text-align: right; }
 .selection-count strong.is-ticking { animation: tick 320ms var(--ease-spring); }

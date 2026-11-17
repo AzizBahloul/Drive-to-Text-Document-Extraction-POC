@@ -21,6 +21,8 @@ const state = {
   eventSource: null,
   clockTimer: null,
   startedAt: 0,
+  activeFilter: "all",
+  searchQuery: "",
 };
 
 const $ = (id) => document.getElementById(id);
@@ -45,6 +47,8 @@ const el = {
   totalCount: $("totalCount"),
   fileList: $("fileList"),
   filesEmpty: $("filesEmpty"),
+  fileSearch: $("fileSearch"),
+  filterChips: $("filterChips"),
   langPicker: $("langPicker"),
   langChips: $("langChips"),
   runButton: $("runButton"),
@@ -52,6 +56,7 @@ const el = {
   batchTitle: $("batchTitle"),
   batchSummary: $("batchSummary"),
   batchClock: $("batchClock"),
+  cancelBatchButton: $("cancelBatchButton"),
   progress: $("progress"),
   progressFill: $("progressFill"),
   jobList: $("jobList"),
@@ -59,6 +64,11 @@ const el = {
   resultsTitle: $("resultsTitle"),
   resultsSummary: $("resultsSummary"),
   exportLink: $("exportLink"),
+  exportTxtLink: $("exportTxtLink"),
+  exportZipLink: $("exportZipLink"),
+  copyAllButton: $("copyAllButton"),
+  toggleAllSheetsButton: $("toggleAllSheetsButton"),
+  retryFailedButton: $("retryFailedButton"),
   restartButton: $("restartButton"),
   sheets: $("sheets"),
 };
@@ -505,12 +515,71 @@ function renderFiles() {
   document.getElementById("runBar").hidden = files.length === 0;
   el.totalCount.textContent = files.length;
   updateSelection();
+  // Reset search/filter state whenever a new folder is loaded.
+  state.activeFilter = "all";
+  state.searchQuery = "";
+  if (el.fileSearch) el.fileSearch.value = "";
+  applyFileFilter();
 }
 
 function toggleFile(id, checked) {
   if (checked) state.selected.add(id);
   else state.selected.delete(id);
   updateSelection();
+}
+
+/* File search + filter chips ---------------------------------------- */
+
+function applyFileFilter() {
+  const query = (state.searchQuery || "").toLowerCase().trim();
+  const filter = state.activeFilter || "all";
+  let visibleCount = 0;
+
+  el.fileList.querySelectorAll(".file-row").forEach((row) => {
+    const file = state.files.find((f) => f.id === row.dataset.id);
+    if (!file) return;
+    const matchesKind =
+      filter === "all" ||
+      (filter === "pdf" && file.kind === "pdf") ||
+      (filter === "image" && file.kind !== "pdf");
+    const haystack = filePath(file).toLowerCase();
+    const matchesSearch = !query || haystack.includes(query);
+    const visible = matchesKind && matchesSearch;
+    row.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+
+  // Update visible count display.
+  const total = state.files.length;
+  el.totalCount.textContent = visibleCount < total ? `${visibleCount} of ${total}` : String(total);
+
+  // Keep selectAll state in sync with what's visible and selected.
+  const visibleIds = [...el.fileList.querySelectorAll(".file-row:not([hidden])")]
+    .map((row) => row.dataset.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => state.selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => state.selected.has(id));
+  el.selectAll.checked = allVisibleSelected;
+  el.selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
+}
+
+if (el.fileSearch) {
+  el.fileSearch.addEventListener("input", () => {
+    state.searchQuery = el.fileSearch.value;
+    applyFileFilter();
+  });
+}
+
+if (el.filterChips) {
+  el.filterChips.addEventListener("click", (event) => {
+    const chip = event.target.closest(".filter-chip");
+    if (!chip) return;
+    state.activeFilter = chip.dataset.filter || "all";
+    el.filterChips.querySelectorAll(".filter-chip").forEach((c) => {
+      c.classList.toggle("is-active", c === chip);
+      c.setAttribute("aria-pressed", String(c === chip));
+    });
+    applyFileFilter();
+  });
 }
 
 el.selectAll.addEventListener("change", () => {
@@ -632,6 +701,7 @@ function startBatch(batchId) {
   el.batchSummary.textContent = "Starting the batch";
   el.progress.classList.remove("is-finished", "has-failures");
   setProgress(0);
+  if (el.cancelBatchButton) el.cancelBatchButton.hidden = false;
   state.files
     .filter((file) => state.selected.has(file.id))
     .forEach((file) => {
@@ -654,6 +724,21 @@ function startBatch(batchId) {
       el.batchSummary.textContent = "Connection lost. Retrying";
     }
   };
+}
+
+if (el.cancelBatchButton) {
+  el.cancelBatchButton.hidden = true;
+  el.cancelBatchButton.addEventListener("click", async () => {
+    if (!state.batch?.batch_id || state.batch?.status !== "running") return;
+    el.cancelBatchButton.disabled = true;
+    try {
+      await api(`/api/batches/${state.batch.batch_id}/cancel`, { method: "POST" });
+    } catch {
+      // Ignore — the SSE stream will reflect the cancellation regardless.
+    } finally {
+      el.cancelBatchButton.disabled = false;
+    }
+  });
 }
 
 function stopBatchStream() {
@@ -808,6 +893,7 @@ function finishBatch(batch) {
   if (state.batch?.status === "finished") return;
   state.batch = { ...state.batch, ...batch, status: "finished" };
   stopBatchStream();
+  if (el.cancelBatchButton) el.cancelBatchButton.hidden = true;
   const { done, failed, total } = batch.summary;
   el.batchTitle.textContent = failed === 0 ? "All done" : done === 0 ? "Nothing extracted" : "Finished with errors";
   el.batchSummary.textContent =
@@ -843,6 +929,22 @@ function renderResults(batch) {
     : "No text could be extracted from the selected files.";
   el.exportLink.href = `/api/batches/${batch.batch_id}/export`;
   el.exportLink.download = `drive-to-text-${batch.batch_id}.json`;
+
+  if (el.exportTxtLink) {
+    el.exportTxtLink.href = `/api/batches/${batch.batch_id}/export?format=txt`;
+    el.exportTxtLink.download = `drive-to-text-${batch.batch_id}.txt`;
+  }
+  if (el.exportZipLink) {
+    el.exportZipLink.href = `/api/batches/${batch.batch_id}/export?format=zip`;
+    el.exportZipLink.download = `drive-to-text-${batch.batch_id}.zip`;
+  }
+
+  // Show "Retry failed" only when there are failed jobs.
+  const failedJobs = jobs.filter((job) => job.status === "failed");
+  if (el.retryFailedButton) el.retryFailedButton.hidden = failedJobs.length === 0;
+
+  // Reset toggle-all label.
+  if (el.toggleAllSheetsButton) el.toggleAllSheetsButton.textContent = "Expand all";
 
   el.sheets.replaceChildren();
   jobs.forEach((job, index) => {
@@ -971,6 +1073,54 @@ el.restartButton.addEventListener("click", () => {
   openStage("link");
   setTimeout(() => el.linkInput.focus(), 400);
 });
+
+/* Results action buttons -------------------------------------------- */
+
+if (el.copyAllButton) {
+  el.copyAllButton.addEventListener("click", async () => {
+    const texts = [...state.jobs.values()]
+      .filter((job) => job.status === "done" && job.text)
+      .map((job) => `### ${filePath(job)}\n\n${job.text}`)
+      .join("\n\n---\n\n");
+    if (!texts) return;
+    try {
+      await navigator.clipboard.writeText(texts);
+      el.copyAllButton.textContent = "Copied!";
+      setTimeout(() => { el.copyAllButton.textContent = "Copy all"; }, 1800);
+    } catch {
+      el.copyAllButton.textContent = "Copy failed";
+      setTimeout(() => { el.copyAllButton.textContent = "Copy all"; }, 2000);
+    }
+  });
+}
+
+if (el.toggleAllSheetsButton) {
+  el.toggleAllSheetsButton.addEventListener("click", () => {
+    const anyOpen = !!el.sheets.querySelector(".sheet.is-open");
+    el.sheets.querySelectorAll(".sheet").forEach((sheet) => toggleSheet(sheet, !anyOpen));
+    el.toggleAllSheetsButton.textContent = anyOpen ? "Expand all" : "Collapse all";
+  });
+}
+
+if (el.retryFailedButton) {
+  el.retryFailedButton.addEventListener("click", () => {
+    // Pre-select only the failed files and go back to stage 2 to re-run.
+    const failedIds = [...state.jobs.values()]
+      .filter((job) => job.status === "failed")
+      .map((job) => job.id);
+    if (!failedIds.length) return;
+    state.selected = new Set(failedIds);
+    // Update checkboxes to match.
+    el.fileList.querySelectorAll(".file-row").forEach((row) => {
+      const checkbox = row.querySelector(".file-check");
+      if (checkbox) checkbox.checked = state.selected.has(row.dataset.id);
+    });
+    updateSelection();
+    closeStagesAfter("files");
+    openStage("files");
+    setTimeout(() => el.runButton.scrollIntoView({ behavior: "smooth", block: "nearest" }), 200);
+  });
+}
 
 /* ------------------------------------------------------------------ live reading */
 /* While a file is processed its row opens onto what the server is reading right now: the

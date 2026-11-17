@@ -7,6 +7,7 @@ import json
 import logging
 from collections import OrderedDict
 from collections.abc import AsyncIterator
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -375,12 +376,73 @@ async def page_preview(batch_id: str, file_id: str, page: int, manager: Manager)
     return image_response(image)
 
 
+@router.post("/batches/{batch_id}/cancel", responses=UNKNOWN_BATCH)
+async def cancel_batch(batch_id: str, manager: Manager) -> dict:
+    """Cancel an ongoing batch, failing any pending or active jobs."""
+    try:
+        batch = manager.cancel(batch_id)
+        return batch.to_dict(include_text=False)
+    except BatchNotFoundError:
+        raise HTTPException(404, "Unknown batch.") from None
+
+
 @router.get("/batches/{batch_id}/export", responses=UNKNOWN_BATCH)
-async def export_batch(batch_id: str, manager: Manager) -> JSONResponse:
+async def export_batch(batch_id: str, manager: Manager, format: str = "json") -> Response:
     try:
         batch = manager.get(batch_id)
     except BatchNotFoundError:
         raise HTTPException(404, "Unknown batch.") from None
+
+    fmt = format.lower()
+    if fmt == "txt":
+        lines = [
+            f"# Drive to Text Export — Batch {batch.id}",
+            f"# Folder: {batch.folder_name or batch.folder_id} ({batch.folder_url})",
+            f"# Date: {batch.created_at.isoformat()}",
+            "",
+            "=" * 60,
+            "",
+        ]
+        for job in batch.jobs.values():
+            file_path = f"{job.file.folder}/{job.file.name}" if job.file.folder else job.file.name
+            lines.append(f"FILE: {file_path}")
+            lines.append(f"STATUS: {job.status.value}")
+            if job.result:
+                lines.append(f"METHOD: {job.result.method.value}")
+                lines.append(f"CHARACTERS: {job.result.char_count}")
+                lines.append("-" * 40)
+                lines.append(job.result.text)
+            elif job.error:
+                lines.append(f"ERROR: {job.error}")
+            lines.append("\n" + "=" * 60 + "\n")
+        filename = f"drive-to-text-{batch.id}.txt"
+        return Response(
+            content="\n".join(lines),
+            media_type="text/plain; charset=utf-8",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
+    if fmt == "zip":
+        import io
+        import zipfile
+
+        buffer = io.BytesIO()
+        with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
+            manifest = batch.to_dict(include_text=False)
+            zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            for job in batch.jobs.values():
+                if job.result and job.result.text:
+                    rel_dir = job.file.folder or ""
+                    txt_name = f"{Path(job.file.name).stem}.txt"
+                    zip_path = f"{rel_dir}/{txt_name}" if rel_dir else txt_name
+                    zf.writestr(zip_path, job.result.text)
+        filename = f"drive-to-text-{batch.id}.zip"
+        return Response(
+            content=buffer.getvalue(),
+            media_type="application/zip",
+            headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        )
+
     filename = f"drive-to-text-{batch.id}.json"
     return JSONResponse(
         content=batch.to_dict(include_text=True),

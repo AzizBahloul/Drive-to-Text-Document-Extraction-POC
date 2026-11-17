@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import logging
+import shutil
+import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -49,6 +51,11 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
+        # Clean up any leftover temp folders from previously aborted sessions
+        for stale in Path(tempfile.gettempdir()).glob("drive-to-text-*"):
+            if stale.is_dir():
+                shutil.rmtree(stale, ignore_errors=True)
+
         http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=15), follow_redirects=True)
         app.state.drive = drive or DriveClient(http, settings.google_api_key)
         app.state.batches = BatchManager(app.state.drive, settings)
