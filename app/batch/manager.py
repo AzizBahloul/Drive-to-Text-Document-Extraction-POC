@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+import re
 import secrets
 import tempfile
 import time
@@ -37,7 +38,7 @@ Event = dict
 # FRAME_INTERVAL_S. The page events themselves are all sent.
 FRAME_INTERVAL_S = 0.2
 PAGE_PREVIEW_WIDTH = 240
-MAX_PAGE_PREVIEWS = 24  # ~15 KB each, trimmed to one when the file is finished
+MAX_PAGE_PREVIEWS = 12  # ~15 KB each, trimmed to one when the file is finished
 EXCERPT_CHARS = 280
 
 
@@ -134,7 +135,12 @@ class BatchManager:
     async def _download_and_extract(
         self, batch: Batch, job: FileJob, resource_key: str | None
     ) -> ExtractionResult:
-        suffix = Path(job.file.name).suffix or (".pdf" if job.file.kind.value == "pdf" else ".img")
+        raw_suffix = Path(job.file.name).suffix.lower()
+        suffix = (
+            raw_suffix
+            if re.match(r"^\.[a-z0-9]{1,10}$", raw_suffix)
+            else (".pdf" if job.file.kind.value == "pdf" else ".img")
+        )
         with tempfile.TemporaryDirectory(prefix="drive-to-text-") as workdir:
             target = Path(workdir) / f"{job.file.id}{suffix}"
             job.downloaded_bytes = await self._drive.download(
@@ -184,16 +190,42 @@ class BatchManager:
     # ----- events ----------------------------------------------------------
 
     def _publish(self, batch: Batch, event: Event) -> None:
-        for queue in list(batch.subscribers):
-            queue.put_nowait(event)
+        batch.seq += 1
+        event_copy = dict(event)
+        event_copy["id"] = batch.seq
+        batch.event_history.append(event_copy)
+        if len(batch.event_history) > 100:
+            batch.event_history.pop(0)
 
-    async def events(self, batch_id: str) -> AsyncIterator[Event]:
+        for queue in list(batch.subscribers):
+            try:
+                queue.put_nowait(event_copy)
+            except asyncio.QueueFull:
+                try:
+                    queue.get_nowait()
+                    queue.put_nowait(event_copy)
+                except (asyncio.QueueEmpty, asyncio.QueueFull):
+                    pass
+
+    async def events(self, batch_id: str, last_event_id: int | None = None) -> AsyncIterator[Event]:
         """Yield a snapshot, then live updates until the batch is finished."""
         batch = self.get(batch_id)
-        queue: asyncio.Queue[Event] = asyncio.Queue()
+        queue: asyncio.Queue[Event] = asyncio.Queue(maxsize=100)
         batch.subscribers.append(queue)
         try:
-            yield {"type": "snapshot", **batch.to_dict(include_text=True)}
+            if last_event_id is not None and batch.event_history:
+                replayed = False
+                for past_event in batch.event_history:
+                    if past_event.get("id", 0) > last_event_id:
+                        yield past_event
+                        replayed = True
+                if replayed and batch.finished_at:
+                    return
+                if not replayed:
+                    yield {"type": "snapshot", **batch.to_dict(include_text=True)}
+            else:
+                yield {"type": "snapshot", **batch.to_dict(include_text=True)}
+
             if batch.finished_at:
                 return
             while True:
@@ -243,7 +275,9 @@ class PageReporter:
                 return  # a text-layer page that went by between two frames
             if due:
                 self._last_frame = now
-                if self._pages is not None:
+                if event.number == 1 and self._job.preview is not None:
+                    image = self._job.preview
+                elif self._pages is not None:
                     image = self._pages.render(event.number)
         text = event.text or ""
         page = {

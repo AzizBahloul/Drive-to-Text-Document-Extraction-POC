@@ -7,6 +7,7 @@ import math
 import os
 import re
 import shutil
+from pathlib import Path
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -42,7 +43,11 @@ def configure(tesseract_cmd: str, tessdata_dir: str | None = None) -> None:
     if tesseract_cmd and tesseract_cmd != "tesseract":
         pytesseract.pytesseract.tesseract_cmd = tesseract_cmd
     if tessdata_dir:
-        os.environ["TESSDATA_PREFIX"] = tessdata_dir
+        if Path(tessdata_dir).is_dir():
+            os.environ["TESSDATA_PREFIX"] = tessdata_dir
+        else:
+            log.warning("Tessdata folder '%s' does not exist; using system default", tessdata_dir)
+            os.environ.pop("TESSDATA_PREFIX", None)
     # Parallelism comes from running several Tesseract processes (pages and files). Letting
     # each one also spawn OpenMP threads oversubscribes the CPU: measured 16-20% slower.
     os.environ.setdefault("OMP_THREAD_LIMIT", "1")
@@ -104,6 +109,20 @@ def prepare_image(image: Image.Image) -> Image.Image:
     return image
 
 
+def _call_tesseract(image: Image.Image, language: str, psm: int, timeout: float) -> str:
+    try:
+        return pytesseract.image_to_string(
+            image,
+            lang=language,
+            config=f"--psm {psm}",
+            timeout=timeout,  # pyright: ignore[reportArgumentType]
+        )
+    except RuntimeError as exc:
+        if "timeout" in str(exc).lower():
+            raise OcrTimeoutError(f"OCR took longer than {timeout:g} s and was stopped.") from exc
+        raise
+
+
 def ocr_image(image: Image.Image, language: str, *, psm: int = 3, timeout: float = 0) -> str:
     """Run Tesseract on a PIL image and return cleaned text.
 
@@ -115,18 +134,32 @@ def ocr_image(image: Image.Image, language: str, *, psm: int = 3, timeout: float
     # PNG compression on both sides: ~8% faster per page, identical text.
     prepared.format = "BMP"
     try:
-        text = pytesseract.image_to_string(
-            prepared,
-            lang=language,
-            config=f"--psm {psm}",
-            # Its stub says int; the value goes to subprocess, which takes float seconds.
-            timeout=timeout,  # pyright: ignore[reportArgumentType]
-        )
-    except RuntimeError as exc:
-        if "timeout" in str(exc).lower():
-            raise OcrTimeoutError(f"OCR took longer than {timeout:g} s and was stopped.") from exc
+        text = _call_tesseract(prepared, language, psm, timeout)
+    except OcrTimeoutError:
         raise
-    return clean_text(text)
+    except Exception as exc:
+        available = installed_languages()
+        if "+" in language and available:
+            fallback = "eng" if "eng" in available else available[0]
+            log.warning("OCR failed for '%s' (%s); falling back to '%s'", language, exc, fallback)
+            text = _call_tesseract(prepared, fallback, psm, timeout)
+        else:
+            raise
+
+    cleaned = clean_text(text)
+    # Preprocessing fallback: if initial pass yielded no text, try an auto-contrast pass
+    if not cleaned:
+        try:
+            enhanced = ImageOps.autocontrast(prepared)
+            enhanced.format = "BMP"
+            alt_text = _call_tesseract(enhanced, language, psm, timeout)
+            alt_cleaned = clean_text(alt_text)
+            if alt_cleaned:
+                return alt_cleaned
+        except Exception:
+            pass
+
+    return cleaned
 
 
 def clean_text(text: str) -> str:

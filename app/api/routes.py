@@ -318,15 +318,20 @@ async def get_batch(batch_id: str, manager: Manager) -> dict:
 
 
 @router.get("/batches/{batch_id}/events", responses=UNKNOWN_BATCH)
-async def batch_events(batch_id: str, manager: Manager):
+async def batch_events(batch_id: str, request: Request, manager: Manager):
     try:
         manager.get(batch_id)
     except BatchNotFoundError:
         raise HTTPException(404, "Unknown batch.") from None
 
+    last_header = request.headers.get("last-event-id") or request.query_params.get("last_event_id")
+    last_id = int(last_header) if last_header and last_header.isdigit() else None
+
     async def stream() -> AsyncIterator[str]:
-        async for event in manager.events(batch_id):
-            yield f"event: {event['type']}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        async for event in manager.events(batch_id, last_event_id=last_id):
+            id_line = f"id: {event['id']}\n" if "id" in event else ""
+            payload = json.dumps(event, ensure_ascii=False)
+            yield f"{id_line}event: {event['type']}\ndata: {payload}\n\n"
 
     return StreamingResponse(
         stream(),
