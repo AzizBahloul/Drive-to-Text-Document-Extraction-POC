@@ -352,6 +352,36 @@ def _api_error_reason(response: httpx.Response) -> str:
     return str(error.get("status", ""))
 
 
+_CONFIRM_HREF_RE = re.compile(r'href="([^"]*confirm=[^"]*)"', re.IGNORECASE)
+_CONFIRM_INPUT_RE = re.compile(r'name="confirm"\s+value="([^"]+)"', re.IGNORECASE)
+_FORM_ACTION_RE = re.compile(r'<form[^>]+action="([^"]+)"', re.IGNORECASE)
+
+
+def _extract_confirm_download_url(original_url: str, html_page: str) -> str | None:
+    """Parse Google Drive's 'virus scan warning' confirmation page for large public files."""
+    href_match = _CONFIRM_HREF_RE.search(html_page)
+    if href_match:
+        raw_href = html.unescape(href_match.group(1))
+        if raw_href.startswith("/"):
+            return f"https://drive.google.com{raw_href}"
+        return raw_href
+
+    confirm_match = _CONFIRM_INPUT_RE.search(html_page)
+    if confirm_match:
+        token = confirm_match.group(1)
+        action_match = _FORM_ACTION_RE.search(html_page)
+        action = html.unescape(action_match.group(1)) if action_match else original_url
+        sep = "&" if "?" in action else "?"
+        return f"{action}{sep}confirm={token}"
+
+    token_search = re.search(r"confirm=([A-Za-z0-9_-]+)", html_page)
+    if token_search:
+        sep = "&" if "?" in original_url else "?"
+        return f"{original_url}{sep}confirm={token_search.group(1)}"
+
+    return None
+
+
 class DriveClient:
     """Facade over the chosen listing/download strategy."""
 
@@ -523,6 +553,23 @@ class DriveClient:
                 )
             content_type = response.headers.get("content-type", "")
             if content_type.startswith("text/html"):
+                html_body = (await response.aread()).decode("utf-8", errors="replace")
+                confirm_url = _extract_confirm_download_url(url, html_body)
+                if confirm_url:
+                    log.info(
+                        "Detected Google Drive virus scan warning page; following confirmation link"
+                    )
+                    async with self._http.stream("GET", confirm_url, headers=headers) as conf_resp:
+                        if conf_resp.status_code == 200 and not conf_resp.headers.get(
+                            "content-type", ""
+                        ).startswith("text/html"):
+                            with destination.open("wb") as handle:
+                                async for chunk in _iter_limited(
+                                    conf_resp.aiter_bytes(), max_bytes, file
+                                ):
+                                    handle.write(chunk)
+                                    written += len(chunk)
+                            return written
                 raise DriveError(
                     "forbidden",
                     "Google Drive returned a web page instead of the file. "

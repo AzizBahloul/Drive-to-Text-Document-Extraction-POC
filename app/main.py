@@ -77,9 +77,9 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
         swagger_ui_oauth2_redirect_url=None,
     )
     app.include_router(router)
-    app.add_middleware(SecurityHeadersMiddleware)
-    # Without a Host allowlist a DNS-rebinding page could drive the local API.
     hosts = settings.allowed_host_list
+    app.add_middleware(SecurityHeadersMiddleware, allowed_hosts=hosts)
+    # Without a Host allowlist a DNS-rebinding page could drive the local API.
     if hosts and "*" not in hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)
 

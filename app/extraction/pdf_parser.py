@@ -134,14 +134,20 @@ def iter_page_sources(
             count = len(document)
         for index in range(count):
             image: Image.Image | None = None
-            with PDFIUM_LOCK:
-                page = document[index]
-                try:
-                    text = page_text(page).strip()
-                    if not has_text_layer(text, min_chars):
-                        text = ""
-                        if render:
-                            image = render_page(page, dpi, max_pixels)
-                finally:
-                    page.close()
+            text = ""
+            try:
+                with PDFIUM_LOCK:
+                    page = document[index]
+                    try:
+                        text = page_text(page).strip()
+                        if not has_text_layer(text, min_chars):
+                            text = ""
+                            if render:
+                                image = render_page(page, dpi, max_pixels)
+                    finally:
+                        page.close()
+            except Exception as exc:
+                log.warning("Could not read page %d of %s: %s", index + 1, path.name, exc)
+                text = ""
+                image = None
             yield index + 1, text, image  # outside the lock: the caller may take its time

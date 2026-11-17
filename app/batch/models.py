@@ -80,6 +80,8 @@ class Batch:
     finished_at: datetime | None = None
     subscribers: list[asyncio.Queue] = field(default_factory=list)
     task: asyncio.Task | None = None
+    event_history: list[dict] = field(default_factory=list)
+    seq: int = 0
 
     @property
     def status(self) -> BatchStatus:

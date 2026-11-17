@@ -292,3 +292,56 @@ def test_api_clients_and_api_paths_keep_json_not_found(client: TestClient) -> No
         assert response.status_code == 404
         assert response.headers["content-type"] == "application/json", path
     assert client.get("/api/batches/unknown").json() == {"detail": "Unknown batch."}
+
+
+# ----- CSRF and rate limiting -------------------------------------------------------
+
+
+def test_cross_origin_mutating_request_is_rejected(client: TestClient) -> None:
+    response = client.post(
+        "/api/folders",
+        json={"url": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"},
+        headers={"Origin": "https://malicious.evil.com"},
+    )
+    assert response.status_code == 403
+    assert response.json() == {"detail": "Cross-origin request forbidden."}
+
+
+def test_same_origin_mutating_request_is_accepted(client: TestClient) -> None:
+    response = client.post(
+        "/api/folders",
+        json={"url": "1AbCdEfGhIjKlMnOpQrStUvWxYz012345"},
+        headers={"Origin": "http://testserver"},
+    )
+    assert response.status_code == 200
+
+
+def test_virus_scan_warning_confirmation_url_extracted() -> None:
+    from app.drive.client import _extract_confirm_download_url
+
+    html = (
+        '<a id="uc-download-link" '
+        'href="/uc?export=download&amp;id=123&amp;confirm=t_xyz">Download</a>'
+    )
+    url = _extract_confirm_download_url(
+        "https://drive.usercontent.google.com/download?id=123", html
+    )
+    assert url == "https://drive.google.com/uc?export=download&id=123&confirm=t_xyz"
+
+
+def test_corrupted_page_in_pdf_is_skipped_gracefully(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    path = tmp_path / "corrupt_page.pdf"
+    path.write_bytes(build_text_pdf(["Page 1 content", "Page 2 content"]))
+
+    orig_page_text = pdf_parser.page_text
+
+    def fail_page_2(page):
+        if "Page 2" in orig_page_text(page):
+            raise RuntimeError("Corrupted font or stream on page 2")
+        return orig_page_text(page)
+
+    monkeypatch.setattr(pdf_parser, "page_text", fail_page_2)
+    sources = list(pdf_parser.iter_page_sources(path, min_chars=5, dpi=72))
+    assert len(sources) == 1  # our test pdf has 1 page in build_text_pdf fixture
