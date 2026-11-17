@@ -215,8 +215,6 @@ class BatchManager:
         event_copy = dict(event)
         event_copy["id"] = batch.seq
         batch.event_history.append(event_copy)
-        if len(batch.event_history) > 100:
-            batch.event_history.pop(0)
 
         for queue in list(batch.subscribers):
             try:

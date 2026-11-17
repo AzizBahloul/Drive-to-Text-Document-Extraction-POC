@@ -135,6 +135,11 @@ class SecurityHeadersMiddleware:
                 headers.setdefault("X-Frame-Options", "DENY")
                 headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
                 headers.setdefault("Content-Security-Policy", policy)
+                # Only set HSTS when running over TLS; ignore for plain HTTP (localhost).
+                if scope.get("scheme") == "https":
+                    headers.setdefault(
+                        "Strict-Transport-Security", "max-age=63072000; includeSubDomains"
+                    )
             await send(message)
 
         await self.app(scope, receive, send_with_headers)

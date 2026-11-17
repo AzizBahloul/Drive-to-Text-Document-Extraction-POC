@@ -583,15 +583,22 @@ if (el.filterChips) {
 }
 
 el.selectAll.addEventListener("change", () => {
-  state.selected = el.selectAll.checked ? new Set(state.files.map((file) => file.id)) : new Set();
-  el.fileList.querySelectorAll(".file-check").forEach((checkbox) => {
-    checkbox.checked = el.selectAll.checked;
+  // Only operate on the rows currently visible after any search/filter.
+  const visibleRows = [...el.fileList.querySelectorAll(".file-row:not([hidden])")];
+  const visibleIds = visibleRows.map((row) => row.dataset.id);
+  if (el.selectAll.checked) {
+    visibleIds.forEach((id) => state.selected.add(id));
+  } else {
+    visibleIds.forEach((id) => state.selected.delete(id));
+  }
+  visibleRows.forEach((row) => {
+    const checkbox = row.querySelector(".file-check");
+    if (checkbox) checkbox.checked = el.selectAll.checked;
   });
   updateSelection();
 });
 
 function updateSelection() {
-  const total = state.files.length;
   const count = state.selected.size;
   el.fileList.querySelectorAll(".file-row").forEach((row) => {
     row.classList.toggle("is-selected", state.selected.has(row.dataset.id));
@@ -602,8 +609,14 @@ function updateSelection() {
     void el.selectedCount.offsetWidth;
     el.selectedCount.classList.add("is-ticking");
   }
-  el.selectAll.checked = total > 0 && count === total;
-  el.selectAll.indeterminate = count > 0 && count < total;
+  // Drive selectAll state from visible rows so it reflects the active filter.
+  const visibleIds = [...el.fileList.querySelectorAll(".file-row:not([hidden])")].map(
+    (row) => row.dataset.id,
+  );
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => state.selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => state.selected.has(id));
+  el.selectAll.checked = allVisibleSelected;
+  el.selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
   el.runButton.querySelector(".button-label").textContent =
     count === 0 ? "Extract text" : `Extract ${plural(count, "file")}`;
   el.runButton.disabled = count === 0;

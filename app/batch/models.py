@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -84,7 +84,7 @@ class Batch:
     finished_at: datetime | None = None
     subscribers: list[asyncio.Queue] = field(default_factory=list)
     task: asyncio.Task | None = None
-    event_history: list[dict] = field(default_factory=list)
+    event_history: deque[dict] = field(default_factory=lambda: deque(maxlen=100))
     seq: int = 0
 
     @property

@@ -345,3 +345,56 @@ def test_corrupted_page_in_pdf_is_skipped_gracefully(
     monkeypatch.setattr(pdf_parser, "page_text", fail_page_2)
     sources = list(pdf_parser.iter_page_sources(path, min_chars=5, dpi=72))
     assert len(sources) == 1  # our test pdf has 1 page in build_text_pdf fixture
+
+
+def test_hsts_header_set_over_https(client: TestClient) -> None:
+    # Starlette's TestClient uses ASGI transport; we can inject a custom scope
+    # by wrapping the app to override the scheme in the HTTP scope.
+    from starlette.types import ASGIApp, Receive, Scope, Send
+
+    base_app: ASGIApp = client.app
+
+    async def https_app(scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] == "http":
+            scope = {**scope, "scheme": "https"}
+        await base_app(scope, receive, send)
+
+    from starlette.testclient import TestClient as _TC
+
+    https_client = _TC(https_app)
+    response = https_client.get("/")
+    assert "strict-transport-security" in {k.lower() for k in response.headers}
+
+
+async def test_cancel_finished_batch_is_a_noop() -> None:
+    """cancel() on an already-finished batch returns it unchanged without error."""
+    from app.batch.manager import BatchManager
+    from app.config import Settings
+    from app.drive.client import DriveFile
+    from tests.conftest import build_text_pdf, drive_file
+
+    class _FakeDrive:
+        mode = "fake"
+
+        async def download(
+            self, file: DriveFile, destination: Path, *, max_bytes, resource_key=None
+        ):
+            data = build_text_pdf(["Hello world, enough chars here."])
+            destination.write_bytes(data)
+            return len(data)
+
+    settings = Settings(max_parallel_files=1, ocr_default_language="eng")
+    bm = BatchManager(drive=_FakeDrive(), settings=settings)
+    file = drive_file("good.pdf", FileKind.PDF)
+    batch = bm.create(
+        folder_id="folder1",
+        folder_url="https://drive.google.com/drive/folders/folder1",
+        folder_name="Test",
+        files=[file],
+        ocr_language="eng",
+    )
+    await batch.task
+    assert batch.finished_at is not None
+    # Cancelling a finished batch is a no-op — returns it unchanged.
+    result = bm.cancel(batch.id)
+    assert result.finished_at is not None

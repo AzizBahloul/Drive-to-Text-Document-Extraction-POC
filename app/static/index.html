@@ -116,9 +116,9 @@
           <div class="files-filters">
             <input class="search-input" id="fileSearch" type="search" placeholder="Filter files or subfolders…" autocomplete="off" spellcheck="false" aria-label="Filter documents">
             <div class="filter-chips" id="filterChips">
-              <button class="filter-chip is-active" type="button" data-filter="all">All</button>
-              <button class="filter-chip" type="button" data-filter="pdf">PDF only</button>
-              <button class="filter-chip" type="button" data-filter="image">Images only</button>
+              <button class="filter-chip is-active" type="button" data-filter="all" aria-pressed="true">All</button>
+              <button class="filter-chip" type="button" data-filter="pdf" aria-pressed="false">PDF only</button>
+              <button class="filter-chip" type="button" data-filter="image" aria-pressed="false">Images only</button>
             </div>
           </div>
           <p class="selection-count" aria-live="polite"><strong id="selectedCount">0</strong> of <span id="totalCount">0</span> selected</p>

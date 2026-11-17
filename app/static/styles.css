@@ -663,7 +663,8 @@ a:hover { color: var(--blue-deep); }
 .filter-chip:hover {
   color: var(--ink);
 }
-.filter-chip.is-active {
+.filter-chip.is-active,
+.filter-chip[aria-pressed="true"] {
   background: var(--sheet);
   color: var(--ink);
   box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);

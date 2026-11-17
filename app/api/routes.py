@@ -380,10 +380,13 @@ async def page_preview(batch_id: str, file_id: str, page: int, manager: Manager)
 async def cancel_batch(batch_id: str, manager: Manager) -> dict:
     """Cancel an ongoing batch, failing any pending or active jobs."""
     try:
-        batch = manager.cancel(batch_id)
-        return batch.to_dict(include_text=False)
+        batch = manager.get(batch_id)
     except BatchNotFoundError:
         raise HTTPException(404, "Unknown batch.") from None
+    if batch.finished_at is not None:
+        raise HTTPException(409, "Batch has already finished.")
+    manager.cancel(batch_id)
+    return batch.to_dict(include_text=False)
 
 
 @router.get("/batches/{batch_id}/export", responses=UNKNOWN_BATCH)
