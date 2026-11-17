@@ -119,6 +119,29 @@ def test_listing_then_batch_then_export(client: TestClient) -> None:
     assert by_name["scan.png"]["status"] == "failed"
     assert "simulated outage" in by_name["scan.png"]["error"]
 
+    txt_export = client.get(f"/api/batches/{batch_id}/export?format=txt")
+    assert txt_export.status_code == 200
+    assert txt_export.headers["content-type"].startswith("text/plain")
+    assert "FILE: report.pdf" in txt_export.text
+    assert "Hello from the API test" in txt_export.text
+    assert "STATUS: failed" in txt_export.text
+
+    zip_export = client.get(f"/api/batches/{batch_id}/export?format=zip")
+    assert zip_export.status_code == 200
+    assert zip_export.headers["content-type"] == "application/zip"
+    import io
+    import zipfile
+
+    with zipfile.ZipFile(io.BytesIO(zip_export.content)) as zf:
+        assert "manifest.json" in zf.namelist()
+        assert "report.txt" in zf.namelist()
+        assert "Hello from the API test" in zf.read("report.txt").decode()
+
+    assert client.get(f"/api/batches/{batch_id}/export?format=invalid").status_code == 422
+
+    cancel_resp = client.post(f"/api/batches/{batch_id}/cancel")
+    assert cancel_resp.status_code == 409
+
 
 def test_batch_rejects_unknown_files_and_languages(client: TestClient) -> None:
     client.post("/api/folders", json={"url": FOLDER})
@@ -140,6 +163,7 @@ def test_unknown_batch_is_404(client: TestClient) -> None:
     assert client.get("/api/batches/nope").status_code == 404
     assert client.get("/api/batches/nope/export").status_code == 404
     assert client.get("/api/batches/nope/events").status_code == 404
+    assert client.post("/api/batches/nope/cancel").status_code == 404
     assert isinstance(httpx.Response, type)
 
 

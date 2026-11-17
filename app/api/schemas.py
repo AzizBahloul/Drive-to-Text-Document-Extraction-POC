@@ -1,10 +1,17 @@
 """Request and response models for the API."""
 
+from enum import StrEnum
 from typing import Annotated
 
 from pydantic import BaseModel, Field
 
 DriveId = Annotated[str, Field(min_length=1, max_length=128, pattern=r"^[A-Za-z0-9_-]+$")]
+
+
+class ExportFormat(StrEnum):
+    JSON = "json"
+    TXT = "txt"
+    ZIP = "zip"
 
 
 class FolderRequest(BaseModel):

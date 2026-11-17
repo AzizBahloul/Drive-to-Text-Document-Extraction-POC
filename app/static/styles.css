@@ -405,10 +405,10 @@ a:hover { color: var(--blue-deep); }
 .button-primary { background: var(--blue); color: var(--on-blue); box-shadow: var(--shadow); }
 .button-primary:hover:not(:disabled) { background: var(--blue-deep); color: var(--on-blue); box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .button-ghost { border-color: var(--rule-strong); background: transparent; }
-.button-ghost:hover { border-color: var(--ink-2); }
+.button-ghost:hover:not(:disabled) { border-color: var(--ink-2); }
 .button-large { min-height: 50px; padding: 0 24px; font-size: 17px; }
 .button-small { min-height: 32px; padding: 0 12px; font-size: 13px; border-color: var(--rule); }
-.button-small:hover { border-color: var(--rule-strong); }
+.button-small:hover:not(:disabled) { border-color: var(--rule-strong); }
 
 /* Loader: a sheet being read. Its lines fill in one after another, the same sheet as
    the app icon. Used in busy buttons; files being processed get the larger .job-page. */
@@ -1165,10 +1165,16 @@ a:hover { color: var(--blue-deep); }
   .job-row { grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-areas: "page status meta" "page name name" "page stamp stamp" "page snippet snippet" "page error error" "live live live"; }
   .fetching { flex-direction: column; align-items: stretch; gap: 14px; padding: 12px; }
   .fetch-reel { width: 100%; }
+  .files-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .files-filters { max-width: none; flex-direction: column; align-items: stretch; }
+  .filter-chips { width: 100%; display: flex; }
+  .filter-chip { flex: 1; text-align: center; }
+  .selection-count { text-align: right; }
   .job-live-inner { grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-left: 0; }
   .run-action { align-items: stretch; width: 100%; }
   .stage-actions { width: 100%; }
   .stage-actions .button { flex: 1; }
+  .export-group { width: 100%; display: flex; }
   .sheet-text { padding: 16px; font-size: 17px; }
 }
 

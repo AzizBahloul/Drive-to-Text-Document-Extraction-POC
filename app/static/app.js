@@ -47,6 +47,7 @@ const el = {
   totalCount: $("totalCount"),
   fileList: $("fileList"),
   filesEmpty: $("filesEmpty"),
+  filterEmpty: $("filterEmpty"),
   fileSearch: $("fileSearch"),
   filterChips: $("filterChips"),
   langPicker: $("langPicker"),
@@ -552,6 +553,9 @@ function applyFileFilter() {
   // Update visible count display.
   const total = state.files.length;
   el.totalCount.textContent = visibleCount < total ? `${visibleCount} of ${total}` : String(total);
+  if (el.filterEmpty) {
+    el.filterEmpty.hidden = !(state.files.length > 0 && visibleCount === 0);
+  }
 
   // Keep selectAll state in sync with what's visible and selected.
   const visibleIds = [...el.fileList.querySelectorAll(".file-row:not([hidden])")]
@@ -714,7 +718,11 @@ function startBatch(batchId) {
   el.batchSummary.textContent = "Starting the batch";
   el.progress.classList.remove("is-finished", "has-failures");
   setProgress(0);
-  if (el.cancelBatchButton) el.cancelBatchButton.hidden = false;
+  if (el.cancelBatchButton) {
+    el.cancelBatchButton.hidden = false;
+    el.cancelBatchButton.disabled = false;
+    el.cancelBatchButton.textContent = "Stop";
+  }
   state.files
     .filter((file) => state.selected.has(file.id))
     .forEach((file) => {
@@ -744,12 +752,11 @@ if (el.cancelBatchButton) {
   el.cancelBatchButton.addEventListener("click", async () => {
     if (!state.batch?.batch_id || state.batch?.status !== "running") return;
     el.cancelBatchButton.disabled = true;
+    el.cancelBatchButton.textContent = "Stopping…";
     try {
       await api(`/api/batches/${state.batch.batch_id}/cancel`, { method: "POST" });
     } catch {
       // Ignore — the SSE stream will reflect the cancellation regardless.
-    } finally {
-      el.cancelBatchButton.disabled = false;
     }
   });
 }
@@ -908,11 +915,20 @@ function finishBatch(batch) {
   stopBatchStream();
   if (el.cancelBatchButton) el.cancelBatchButton.hidden = true;
   const { done, failed, total } = batch.summary;
-  el.batchTitle.textContent = failed === 0 ? "All done" : done === 0 ? "Nothing extracted" : "Finished with errors";
-  el.batchSummary.textContent =
-    failed === 0
-      ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
-      : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
+  const wasCancelled = [...state.jobs.values()].some(
+    (job) => job.error === "Extraction was cancelled."
+  );
+  if (wasCancelled) {
+    el.batchTitle.textContent = done === 0 ? "Cancelled" : "Cancelled (partial results)";
+    el.batchSummary.textContent = `${done} of ${total} extracted before cancellation.`;
+  } else {
+    el.batchTitle.textContent =
+      failed === 0 ? "All done" : done === 0 ? "Nothing extracted" : "Finished with errors";
+    el.batchSummary.textContent =
+      failed === 0
+        ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
+        : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
+  }
   el.progress.classList.add("is-finished");
   el.progress.classList.toggle("has-failures", failed > 0);
   renderResults(batch);
@@ -956,8 +972,9 @@ function renderResults(batch) {
   const failedJobs = jobs.filter((job) => job.status === "failed");
   if (el.retryFailedButton) el.retryFailedButton.hidden = failedJobs.length === 0;
 
-  // Reset toggle-all label.
-  if (el.toggleAllSheetsButton) el.toggleAllSheetsButton.textContent = "Expand all";
+  // Disable "Copy all" if no done files have non-empty text.
+  const hasText = done.some((job) => job.text && job.text.trim());
+  if (el.copyAllButton) el.copyAllButton.disabled = !hasText;
 
   el.sheets.replaceChildren();
   jobs.forEach((job, index) => {
@@ -967,6 +984,7 @@ function renderResults(batch) {
   });
   const first = el.sheets.querySelector(".sheet:not(.is-failed)");
   if (first) toggleSheet(first, true);
+  updateToggleAllButton();
   observeSheets();
 }
 
@@ -1054,6 +1072,19 @@ function toggleSheet(sheet, force) {
   const open = force ?? !sheet.classList.contains("is-open");
   sheet.classList.toggle("is-open", open);
   sheet.querySelector(".sheet-toggle").setAttribute("aria-expanded", String(open));
+  updateToggleAllButton();
+}
+
+function updateToggleAllButton() {
+  if (!el.toggleAllSheetsButton) return;
+  const sheets = [...el.sheets.querySelectorAll(".sheet")];
+  if (!sheets.length) {
+    el.toggleAllSheetsButton.disabled = true;
+    return;
+  }
+  el.toggleAllSheetsButton.disabled = false;
+  const allOpen = sheets.every((s) => s.classList.contains("is-open"));
+  el.toggleAllSheetsButton.textContent = allOpen ? "Collapse all" : "Expand all";
 }
 
 function observeSheets() {
@@ -1109,9 +1140,10 @@ if (el.copyAllButton) {
 
 if (el.toggleAllSheetsButton) {
   el.toggleAllSheetsButton.addEventListener("click", () => {
-    const anyOpen = !!el.sheets.querySelector(".sheet.is-open");
-    el.sheets.querySelectorAll(".sheet").forEach((sheet) => toggleSheet(sheet, !anyOpen));
-    el.toggleAllSheetsButton.textContent = anyOpen ? "Expand all" : "Collapse all";
+    const sheets = [...el.sheets.querySelectorAll(".sheet")];
+    if (!sheets.length) return;
+    const allOpen = sheets.every((s) => s.classList.contains("is-open"));
+    sheets.forEach((sheet) => toggleSheet(sheet, !allOpen));
   });
 }
 
@@ -1131,6 +1163,7 @@ if (el.retryFailedButton) {
     updateSelection();
     closeStagesAfter("files");
     openStage("files");
+    focusHeading(el.filesTitle);
     setTimeout(() => el.runButton.scrollIntoView({ behavior: "smooth", block: "nearest" }), 200);
   });
 }

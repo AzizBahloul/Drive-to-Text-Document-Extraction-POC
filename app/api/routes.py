@@ -19,6 +19,7 @@ from app.api.schemas import (
     CapabilitiesResponse,
     DetailResponse,
     ErrorResponse,
+    ExportFormat,
     FileOut,
     FolderRequest,
     FolderResponse,
@@ -60,6 +61,10 @@ NO_IMAGE: dict[int | str, dict] = {
 }
 UNKNOWN_BATCH: dict[int | str, dict] = {
     404: {"model": DetailResponse, "description": "No batch with this id (or it expired)."}
+}
+CANCEL_RESPONSES: dict[int | str, dict] = {
+    **UNKNOWN_BATCH,
+    409: {"model": DetailResponse, "description": "Batch has already finished."},
 }
 
 
@@ -376,7 +381,7 @@ async def page_preview(batch_id: str, file_id: str, page: int, manager: Manager)
     return image_response(image)
 
 
-@router.post("/batches/{batch_id}/cancel", responses=UNKNOWN_BATCH)
+@router.post("/batches/{batch_id}/cancel", responses=CANCEL_RESPONSES)
 async def cancel_batch(batch_id: str, manager: Manager) -> dict:
     """Cancel an ongoing batch, failing any pending or active jobs."""
     try:
@@ -390,14 +395,15 @@ async def cancel_batch(batch_id: str, manager: Manager) -> dict:
 
 
 @router.get("/batches/{batch_id}/export", responses=UNKNOWN_BATCH)
-async def export_batch(batch_id: str, manager: Manager, format: str = "json") -> Response:
+async def export_batch(
+    batch_id: str, manager: Manager, format: ExportFormat = ExportFormat.JSON
+) -> Response:
     try:
         batch = manager.get(batch_id)
     except BatchNotFoundError:
         raise HTTPException(404, "Unknown batch.") from None
 
-    fmt = format.lower()
-    if fmt == "txt":
+    if format == ExportFormat.TXT:
         lines = [
             f"# Drive to Text Export — Batch {batch.id}",
             f"# Folder: {batch.folder_name or batch.folder_id} ({batch.folder_url})",
@@ -425,7 +431,7 @@ async def export_batch(batch_id: str, manager: Manager, format: str = "json") ->
             headers={"Content-Disposition": f'attachment; filename="{filename}"'},
         )
 
-    if fmt == "zip":
+    if format == ExportFormat.ZIP:
         import io
         import zipfile
 
@@ -433,11 +439,19 @@ async def export_batch(batch_id: str, manager: Manager, format: str = "json") ->
         with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as zf:
             manifest = batch.to_dict(include_text=False)
             zf.writestr("manifest.json", json.dumps(manifest, indent=2))
+            seen_paths: set[str] = {"manifest.json"}
             for job in batch.jobs.values():
                 if job.result and job.result.text:
-                    rel_dir = job.file.folder or ""
-                    txt_name = f"{Path(job.file.name).stem}.txt"
-                    zip_path = f"{rel_dir}/{txt_name}" if rel_dir else txt_name
+                    rel_dir = job.file.folder.strip("/") if job.file.folder else ""
+                    stem = Path(job.file.name).stem or "document"
+                    base_name = f"{stem}.txt"
+                    zip_path = f"{rel_dir}/{base_name}" if rel_dir else base_name
+                    counter = 1
+                    while zip_path in seen_paths:
+                        counter += 1
+                        suffixed = f"{stem} ({counter}).txt"
+                        zip_path = f"{rel_dir}/{suffixed}" if rel_dir else suffixed
+                    seen_paths.add(zip_path)
                     zf.writestr(zip_path, job.result.text)
         filename = f"drive-to-text-{batch.id}.zip"
         return Response(
