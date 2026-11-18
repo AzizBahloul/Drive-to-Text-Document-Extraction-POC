@@ -108,7 +108,10 @@ async def test_export_contains_text_and_summary(manager: BatchManager) -> None:
     payload = batch.to_dict(include_text=True)
     assert payload["summary"]["done"] == 1
     assert payload["files"][0]["method"] == "pdf-parser"
-    assert payload["files"][0]["pages"] == [
-        {"page": 1, "method": "pdf-parser", "chars": payload["files"][0]["char_count"]}
-    ]
+    page = payload["files"][0]["pages"][0]
+    assert page["page"] == 1
+    assert page["method"] == "pdf-parser"
+    assert page["chars"] == payload["files"][0]["char_count"]
+    # With include_text=True each page carries its extracted text.
+    assert "text" in page
     await asyncio.sleep(0)

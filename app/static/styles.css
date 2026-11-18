@@ -181,20 +181,6 @@ a:hover { color: var(--blue-deep); }
 .mark-highlight { fill: var(--mark); }
 .mark-lines { stroke: var(--ink); stroke-width: 3.5; stroke-linecap: round; fill: none; }
 
-.topbar-meta { display: flex; gap: 8px; flex-wrap: wrap; }
-.meta-chip {
-  font-size: 13px;
-  color: var(--ink-2);
-  padding: 4px 10px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--sheet);
-  transition: color var(--t-base), border-color var(--t-base);
-}
-.meta-chip.is-good { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--rule)); }
-.meta-chip.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--rule)); }
-
-.topbar-meta { margin-left: auto; }
 .theme-toggle {
   display: grid;
   place-items: center;
@@ -405,10 +391,10 @@ a:hover { color: var(--blue-deep); }
 .button-primary { background: var(--blue); color: var(--on-blue); box-shadow: var(--shadow); }
 .button-primary:hover:not(:disabled) { background: var(--blue-deep); color: var(--on-blue); box-shadow: var(--shadow-lift); transform: translateY(-1px); }
 .button-ghost { border-color: var(--rule-strong); background: transparent; }
-.button-ghost:hover { border-color: var(--ink-2); }
+.button-ghost:hover:not(:disabled) { border-color: var(--ink-2); }
 .button-large { min-height: 50px; padding: 0 24px; font-size: 17px; }
 .button-small { min-height: 32px; padding: 0 12px; font-size: 13px; border-color: var(--rule); }
-.button-small:hover { border-color: var(--rule-strong); }
+.button-small:hover:not(:disabled) { border-color: var(--rule-strong); }
 
 /* Loader: a sheet being read. Its lines fill in one after another, the same sheet as
    the app icon. Used in busy buttons; files being processed get the larger .job-page. */
@@ -617,6 +603,66 @@ a:hover { color: var(--blue-deep); }
   padding: 10px 14px;
   margin-bottom: 8px;
   border-bottom: 1px solid var(--rule);
+}
+.files-filters {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex: 1;
+  max-width: 460px;
+}
+.search-input {
+  flex: 1;
+  height: 32px;
+  padding: 0 10px;
+  font-family: inherit;
+  font-size: 13.5px;
+  color: var(--ink);
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: 6px;
+  outline: none;
+  transition: border-color var(--t-fast);
+}
+.search-input:focus {
+  border-color: var(--blue);
+}
+.filter-chips {
+  display: inline-flex;
+  gap: 2px;
+  background: var(--rule);
+  padding: 2px;
+  border-radius: 6px;
+}
+.filter-chip {
+  background: transparent;
+  border: none;
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  padding: 4px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: background var(--t-fast), color var(--t-fast);
+}
+.filter-chip:hover {
+  color: var(--ink);
+}
+.filter-chip.is-active,
+.filter-chip[aria-pressed="true"] {
+  background: var(--sheet);
+  color: var(--ink);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.06);
+}
+.batch-head-actions {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.export-group {
+  display: inline-flex;
+  gap: 4px;
 }
 .selection-count { margin: 0; color: var(--ink-2); font-size: 15px; }
 .selection-count strong { display: inline-block; color: var(--ink); font-weight: 700; min-width: 1.2ch; text-align: right; }
@@ -1105,10 +1151,16 @@ a:hover { color: var(--blue-deep); }
   .job-row { grid-template-columns: 34px minmax(0, 1fr) auto; grid-template-areas: "page status meta" "page name name" "page stamp stamp" "page snippet snippet" "page error error" "live live live"; }
   .fetching { flex-direction: column; align-items: stretch; gap: 14px; padding: 12px; }
   .fetch-reel { width: 100%; }
+  .files-toolbar { flex-direction: column; align-items: stretch; gap: 10px; }
+  .files-filters { max-width: none; flex-direction: column; align-items: stretch; }
+  .filter-chips { width: 100%; display: flex; }
+  .filter-chip { flex: 1; text-align: center; }
+  .selection-count { text-align: right; }
   .job-live-inner { grid-template-columns: 64px minmax(0, 1fr); gap: 14px; padding-left: 0; }
   .run-action { align-items: stretch; width: 100%; }
   .stage-actions { width: 100%; }
   .stage-actions .button { flex: 1; }
+  .export-group { width: 100%; display: flex; }
   .sheet-text { padding: 16px; font-size: 17px; }
 }
 

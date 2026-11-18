@@ -11,7 +11,6 @@ const NUMBER = new Intl.NumberFormat("en");
 const formatCount = (value) => NUMBER.format(value);
 
 const state = {
-  capabilities: null,
   folder: null,
   files: [],
   selected: new Set(),
@@ -21,12 +20,13 @@ const state = {
   eventSource: null,
   clockTimer: null,
   startedAt: 0,
+  activeFilter: "all",
+  searchQuery: "",
 };
 
 const $ = (id) => document.getElementById(id);
 const el = {
   splash: $("splash"),
-  capabilities: $("capabilities"),
   spineFill: $("spineFill"),
   linkForm: $("linkForm"),
   linkField: $("linkField"),
@@ -45,6 +45,9 @@ const el = {
   totalCount: $("totalCount"),
   fileList: $("fileList"),
   filesEmpty: $("filesEmpty"),
+  filterEmpty: $("filterEmpty"),
+  fileSearch: $("fileSearch"),
+  filterChips: $("filterChips"),
   langPicker: $("langPicker"),
   langChips: $("langChips"),
   runButton: $("runButton"),
@@ -52,6 +55,7 @@ const el = {
   batchTitle: $("batchTitle"),
   batchSummary: $("batchSummary"),
   batchClock: $("batchClock"),
+  cancelBatchButton: $("cancelBatchButton"),
   progress: $("progress"),
   progressFill: $("progressFill"),
   jobList: $("jobList"),
@@ -59,6 +63,11 @@ const el = {
   resultsTitle: $("resultsTitle"),
   resultsSummary: $("resultsSummary"),
   exportLink: $("exportLink"),
+  exportTxtLink: $("exportTxtLink"),
+  exportZipLink: $("exportZipLink"),
+  copyAllButton: $("copyAllButton"),
+  toggleAllSheetsButton: $("toggleAllSheetsButton"),
+  retryFailedButton: $("retryFailedButton"),
   restartButton: $("restartButton"),
   sheets: $("sheets"),
 };
@@ -205,34 +214,13 @@ function dismissSplash() {
 /* ------------------------------------------------------------------ capabilities */
 
 async function loadCapabilities() {
-  const driveChip = el.capabilities.querySelector('[data-meta="drive"]');
-  const ocrChip = el.capabilities.querySelector('[data-meta="ocr"]');
+  let capabilities;
   try {
-    state.capabilities = await api("/api/capabilities");
-  } catch (error) {
-    driveChip.textContent = "Server unreachable";
-    driveChip.classList.add("is-warn");
-    ocrChip.hidden = true;
-    return;
+    capabilities = await api("/api/capabilities");
+  } catch {
+    capabilities = null;
   }
-  const caps = state.capabilities;
-  if (caps.drive_mode === "drive-api") {
-    driveChip.textContent = "Drive API key";
-    driveChip.classList.add("is-good");
-  } else {
-    driveChip.textContent = "Drive: public page mode";
-    driveChip.classList.add("is-warn");
-    driveChip.title = "No GOOGLE_API_KEY set. Listing works for public folders but file sizes are unknown.";
-  }
-  if (caps.ocr_available) {
-    ocrChip.textContent = `OCR: ${caps.ocr_languages.map((code) => LANGUAGE_NAMES[code] || code).join(", ")}`;
-    ocrChip.classList.add("is-good");
-  } else {
-    ocrChip.textContent = "OCR unavailable";
-    ocrChip.classList.add("is-warn");
-    ocrChip.title = "Tesseract was not found. Images and scanned PDFs cannot be processed.";
-  }
-  renderLanguageChips();
+  renderLanguageChips(capabilities);
 }
 
 /* ------------------------------------------------------------------ stage 1: link */
@@ -505,6 +493,11 @@ function renderFiles() {
   document.getElementById("runBar").hidden = files.length === 0;
   el.totalCount.textContent = files.length;
   updateSelection();
+  // Reset search/filter state whenever a new folder is loaded.
+  state.activeFilter = "all";
+  state.searchQuery = "";
+  if (el.fileSearch) el.fileSearch.value = "";
+  applyFileFilter();
 }
 
 function toggleFile(id, checked) {
@@ -513,16 +506,80 @@ function toggleFile(id, checked) {
   updateSelection();
 }
 
+/* File search + filter chips ---------------------------------------- */
+
+function applyFileFilter() {
+  const query = (state.searchQuery || "").toLowerCase().trim();
+  const filter = state.activeFilter || "all";
+  let visibleCount = 0;
+
+  el.fileList.querySelectorAll(".file-row").forEach((row) => {
+    const file = state.files.find((f) => f.id === row.dataset.id);
+    if (!file) return;
+    const matchesKind =
+      filter === "all" ||
+      (filter === "pdf" && file.kind === "pdf") ||
+      (filter === "image" && file.kind !== "pdf");
+    const haystack = filePath(file).toLowerCase();
+    const matchesSearch = !query || haystack.includes(query);
+    const visible = matchesKind && matchesSearch;
+    row.hidden = !visible;
+    if (visible) visibleCount += 1;
+  });
+
+  // Update visible count display.
+  const total = state.files.length;
+  el.totalCount.textContent = visibleCount < total ? `${visibleCount} of ${total}` : String(total);
+  if (el.filterEmpty) {
+    el.filterEmpty.hidden = !(state.files.length > 0 && visibleCount === 0);
+  }
+
+  // Keep selectAll state in sync with what's visible and selected.
+  const visibleIds = [...el.fileList.querySelectorAll(".file-row:not([hidden])")]
+    .map((row) => row.dataset.id);
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => state.selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => state.selected.has(id));
+  el.selectAll.checked = allVisibleSelected;
+  el.selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
+}
+
+if (el.fileSearch) {
+  el.fileSearch.addEventListener("input", () => {
+    state.searchQuery = el.fileSearch.value;
+    applyFileFilter();
+  });
+}
+
+if (el.filterChips) {
+  el.filterChips.addEventListener("click", (event) => {
+    const chip = event.target.closest(".filter-chip");
+    if (!chip) return;
+    state.activeFilter = chip.dataset.filter || "all";
+    el.filterChips.querySelectorAll(".filter-chip").forEach((c) => {
+      c.classList.toggle("is-active", c === chip);
+      c.setAttribute("aria-pressed", String(c === chip));
+    });
+    applyFileFilter();
+  });
+}
+
 el.selectAll.addEventListener("change", () => {
-  state.selected = el.selectAll.checked ? new Set(state.files.map((file) => file.id)) : new Set();
-  el.fileList.querySelectorAll(".file-check").forEach((checkbox) => {
-    checkbox.checked = el.selectAll.checked;
+  // Only operate on the rows currently visible after any search/filter.
+  const visibleRows = [...el.fileList.querySelectorAll(".file-row:not([hidden])")];
+  const visibleIds = visibleRows.map((row) => row.dataset.id);
+  if (el.selectAll.checked) {
+    visibleIds.forEach((id) => state.selected.add(id));
+  } else {
+    visibleIds.forEach((id) => state.selected.delete(id));
+  }
+  visibleRows.forEach((row) => {
+    const checkbox = row.querySelector(".file-check");
+    if (checkbox) checkbox.checked = el.selectAll.checked;
   });
   updateSelection();
 });
 
 function updateSelection() {
-  const total = state.files.length;
   const count = state.selected.size;
   el.fileList.querySelectorAll(".file-row").forEach((row) => {
     row.classList.toggle("is-selected", state.selected.has(row.dataset.id));
@@ -533,21 +590,28 @@ function updateSelection() {
     void el.selectedCount.offsetWidth;
     el.selectedCount.classList.add("is-ticking");
   }
-  el.selectAll.checked = total > 0 && count === total;
-  el.selectAll.indeterminate = count > 0 && count < total;
+  // Drive selectAll state from visible rows so it reflects the active filter.
+  const visibleIds = [...el.fileList.querySelectorAll(".file-row:not([hidden])")].map(
+    (row) => row.dataset.id,
+  );
+  const allVisibleSelected = visibleIds.length > 0 && visibleIds.every((id) => state.selected.has(id));
+  const someVisibleSelected = visibleIds.some((id) => state.selected.has(id));
+  el.selectAll.checked = allVisibleSelected;
+  el.selectAll.indeterminate = !allVisibleSelected && someVisibleSelected;
   el.runButton.querySelector(".button-label").textContent =
     count === 0 ? "Extract text" : `Extract ${plural(count, "file")}`;
   el.runButton.disabled = count === 0;
   showError(el.runError, "");
 }
 
-function renderLanguageChips() {
-  const caps = state.capabilities;
+function renderLanguageChips(caps) {
   el.langChips.replaceChildren();
   if (!caps || !caps.ocr_available) {
     const note = document.createElement("p");
     note.className = "lang-note";
-    note.textContent = "OCR is not installed on the server. Native PDFs still work; images will fail and scanned pages stay empty.";
+    note.textContent = caps
+      ? "OCR is not installed on the server. Native PDFs still work; images will fail and scanned pages stay empty."
+      : "Could not check OCR availability. Reload the page to try again.";
     el.langChips.appendChild(note);
     return;
   }
@@ -632,6 +696,11 @@ function startBatch(batchId) {
   el.batchSummary.textContent = "Starting the batch";
   el.progress.classList.remove("is-finished", "has-failures");
   setProgress(0);
+  if (el.cancelBatchButton) {
+    el.cancelBatchButton.hidden = false;
+    el.cancelBatchButton.disabled = false;
+    el.cancelBatchButton.textContent = "Stop";
+  }
   state.files
     .filter((file) => state.selected.has(file.id))
     .forEach((file) => {
@@ -654,6 +723,20 @@ function startBatch(batchId) {
       el.batchSummary.textContent = "Connection lost. Retrying";
     }
   };
+}
+
+if (el.cancelBatchButton) {
+  el.cancelBatchButton.hidden = true;
+  el.cancelBatchButton.addEventListener("click", async () => {
+    if (!state.batch?.batch_id || state.batch?.status !== "running") return;
+    el.cancelBatchButton.disabled = true;
+    el.cancelBatchButton.textContent = "Stopping…";
+    try {
+      await api(`/api/batches/${state.batch.batch_id}/cancel`, { method: "POST" });
+    } catch {
+      // Ignore — the SSE stream will reflect the cancellation regardless.
+    }
+  });
 }
 
 function stopBatchStream() {
@@ -808,12 +891,22 @@ function finishBatch(batch) {
   if (state.batch?.status === "finished") return;
   state.batch = { ...state.batch, ...batch, status: "finished" };
   stopBatchStream();
+  if (el.cancelBatchButton) el.cancelBatchButton.hidden = true;
   const { done, failed, total } = batch.summary;
-  el.batchTitle.textContent = failed === 0 ? "All done" : done === 0 ? "Nothing extracted" : "Finished with errors";
-  el.batchSummary.textContent =
-    failed === 0
-      ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
-      : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
+  const wasCancelled = [...state.jobs.values()].some(
+    (job) => job.error === "Extraction was cancelled."
+  );
+  if (wasCancelled) {
+    el.batchTitle.textContent = done === 0 ? "Cancelled" : "Cancelled (partial results)";
+    el.batchSummary.textContent = `${done} of ${total} extracted before cancellation.`;
+  } else {
+    el.batchTitle.textContent =
+      failed === 0 ? "All done" : done === 0 ? "Nothing extracted" : "Finished with errors";
+    el.batchSummary.textContent =
+      failed === 0
+        ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
+        : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
+  }
   el.progress.classList.add("is-finished");
   el.progress.classList.toggle("has-failures", failed > 0);
   renderResults(batch);
@@ -844,6 +937,23 @@ function renderResults(batch) {
   el.exportLink.href = `/api/batches/${batch.batch_id}/export`;
   el.exportLink.download = `drive-to-text-${batch.batch_id}.json`;
 
+  if (el.exportTxtLink) {
+    el.exportTxtLink.href = `/api/batches/${batch.batch_id}/export?format=txt`;
+    el.exportTxtLink.download = `drive-to-text-${batch.batch_id}.txt`;
+  }
+  if (el.exportZipLink) {
+    el.exportZipLink.href = `/api/batches/${batch.batch_id}/export?format=zip`;
+    el.exportZipLink.download = `drive-to-text-${batch.batch_id}.zip`;
+  }
+
+  // Show "Retry failed" only when there are failed jobs.
+  const failedJobs = jobs.filter((job) => job.status === "failed");
+  if (el.retryFailedButton) el.retryFailedButton.hidden = failedJobs.length === 0;
+
+  // Disable "Copy all" if no done files have non-empty text.
+  const hasText = done.some((job) => job.text && job.text.trim());
+  if (el.copyAllButton) el.copyAllButton.disabled = !hasText;
+
   el.sheets.replaceChildren();
   jobs.forEach((job, index) => {
     const sheet = buildSheet(job);
@@ -852,6 +962,7 @@ function renderResults(batch) {
   });
   const first = el.sheets.querySelector(".sheet:not(.is-failed)");
   if (first) toggleSheet(first, true);
+  updateToggleAllButton();
   observeSheets();
 }
 
@@ -939,6 +1050,19 @@ function toggleSheet(sheet, force) {
   const open = force ?? !sheet.classList.contains("is-open");
   sheet.classList.toggle("is-open", open);
   sheet.querySelector(".sheet-toggle").setAttribute("aria-expanded", String(open));
+  updateToggleAllButton();
+}
+
+function updateToggleAllButton() {
+  if (!el.toggleAllSheetsButton) return;
+  const sheets = [...el.sheets.querySelectorAll(".sheet")];
+  if (!sheets.length) {
+    el.toggleAllSheetsButton.disabled = true;
+    return;
+  }
+  el.toggleAllSheetsButton.disabled = false;
+  const allOpen = sheets.every((s) => s.classList.contains("is-open"));
+  el.toggleAllSheetsButton.textContent = allOpen ? "Collapse all" : "Expand all";
 }
 
 function observeSheets() {
@@ -971,6 +1095,56 @@ el.restartButton.addEventListener("click", () => {
   openStage("link");
   setTimeout(() => el.linkInput.focus(), 400);
 });
+
+/* Results action buttons -------------------------------------------- */
+
+if (el.copyAllButton) {
+  el.copyAllButton.addEventListener("click", async () => {
+    const texts = [...state.jobs.values()]
+      .filter((job) => job.status === "done" && job.text)
+      .map((job) => `### ${filePath(job)}\n\n${job.text}`)
+      .join("\n\n---\n\n");
+    if (!texts) return;
+    try {
+      await navigator.clipboard.writeText(texts);
+      el.copyAllButton.textContent = "Copied!";
+      setTimeout(() => { el.copyAllButton.textContent = "Copy all"; }, 1800);
+    } catch {
+      el.copyAllButton.textContent = "Copy failed";
+      setTimeout(() => { el.copyAllButton.textContent = "Copy all"; }, 2000);
+    }
+  });
+}
+
+if (el.toggleAllSheetsButton) {
+  el.toggleAllSheetsButton.addEventListener("click", () => {
+    const sheets = [...el.sheets.querySelectorAll(".sheet")];
+    if (!sheets.length) return;
+    const allOpen = sheets.every((s) => s.classList.contains("is-open"));
+    sheets.forEach((sheet) => toggleSheet(sheet, !allOpen));
+  });
+}
+
+if (el.retryFailedButton) {
+  el.retryFailedButton.addEventListener("click", () => {
+    // Pre-select only the failed files and go back to stage 2 to re-run.
+    const failedIds = [...state.jobs.values()]
+      .filter((job) => job.status === "failed")
+      .map((job) => job.id);
+    if (!failedIds.length) return;
+    state.selected = new Set(failedIds);
+    // Update checkboxes to match.
+    el.fileList.querySelectorAll(".file-row").forEach((row) => {
+      const checkbox = row.querySelector(".file-check");
+      if (checkbox) checkbox.checked = state.selected.has(row.dataset.id);
+    });
+    updateSelection();
+    closeStagesAfter("files");
+    openStage("files");
+    focusHeading(el.filesTitle);
+    setTimeout(() => el.runButton.scrollIntoView({ behavior: "smooth", block: "nearest" }), 200);
+  });
+}
 
 /* ------------------------------------------------------------------ live reading */
 /* While a file is processed its row opens onto what the server is reading right now: the

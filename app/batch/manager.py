@@ -100,14 +100,35 @@ class BatchManager:
         except KeyError as exc:
             raise BatchNotFoundError(batch_id) from exc
 
+    def cancel(self, batch_id: str) -> Batch:
+        """Cancel an in-flight batch and mark unfinished jobs as cancelled."""
+        batch = self.get(batch_id)
+        if batch.finished_at is not None:
+            return batch
+        if batch.task and not batch.task.done():
+            batch.task.cancel()
+        now = datetime.now(UTC)
+        for job in batch.jobs.values():
+            if job.status in {FileStatus.PENDING, FileStatus.PROCESSING}:
+                job.status = FileStatus.FAILED
+                job.error = "Extraction was cancelled."
+                job.finished_at = now
+        batch.finished_at = now
+        self._publish(batch, {"type": "batch", **batch.to_dict(include_text=False)})
+        log.info("Batch %s cancelled by user", batch.id)
+        return batch
+
     async def _run(self, batch: Batch, resource_key: str | None) -> None:
         try:
             await asyncio.gather(
                 *(self._process(batch, job, resource_key) for job in batch.jobs.values()),
                 return_exceptions=True,
             )
+        except asyncio.CancelledError:
+            log.info("Batch %s task cancelled", batch.id)
         finally:
-            batch.finished_at = datetime.now(UTC)
+            if batch.finished_at is None:
+                batch.finished_at = datetime.now(UTC)
             self._publish(batch, {"type": "batch", **batch.to_dict(include_text=False)})
             log.info("Batch %s finished: %s", batch.id, batch.counts())
 
@@ -194,8 +215,6 @@ class BatchManager:
         event_copy = dict(event)
         event_copy["id"] = batch.seq
         batch.event_history.append(event_copy)
-        if len(batch.event_history) > 100:
-            batch.event_history.pop(0)
 
         for queue in list(batch.subscribers):
             try:

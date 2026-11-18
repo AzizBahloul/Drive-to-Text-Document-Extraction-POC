@@ -20,8 +20,11 @@ class PageResult:
     def char_count(self) -> int:
         return len(self.text)
 
-    def to_dict(self) -> dict:
-        return {"page": self.number, "method": self.method.value, "chars": self.char_count}
+    def to_dict(self, *, include_text: bool = False) -> dict:
+        payload = {"page": self.number, "method": self.method.value, "chars": self.char_count}
+        if include_text:
+            payload["text"] = self.text
+        return payload
 
 
 @dataclass

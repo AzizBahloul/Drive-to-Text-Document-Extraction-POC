@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import asyncio
-from collections import OrderedDict
+from collections import OrderedDict, deque
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
@@ -54,7 +54,11 @@ class FileJob:
             "status": self.status.value,
             "method": self.result.method.value if self.result else None,
             "ocr_language": self.result.ocr_language if self.result else None,
-            "pages": [page.to_dict() for page in self.result.pages] if self.result else [],
+            "pages": (
+                [page.to_dict(include_text=include_text) for page in self.result.pages]
+                if self.result
+                else []
+            ),
             "char_count": self.result.char_count if self.result else 0,
             "warnings": list(self.result.warnings) if self.result else [],
             "error": self.error,
@@ -80,7 +84,7 @@ class Batch:
     finished_at: datetime | None = None
     subscribers: list[asyncio.Queue] = field(default_factory=list)
     task: asyncio.Task | None = None
-    event_history: list[dict] = field(default_factory=list)
+    event_history: deque[dict] = field(default_factory=lambda: deque(maxlen=100))
     seq: int = 0
 
     @property
