@@ -11,7 +11,6 @@ const NUMBER = new Intl.NumberFormat("en");
 const formatCount = (value) => NUMBER.format(value);
 
 const state = {
-  capabilities: null,
   folder: null,
   files: [],
   selected: new Set(),
@@ -28,7 +27,6 @@ const state = {
 const $ = (id) => document.getElementById(id);
 const el = {
   splash: $("splash"),
-  capabilities: $("capabilities"),
   spineFill: $("spineFill"),
   linkForm: $("linkForm"),
   linkField: $("linkField"),
@@ -216,34 +214,13 @@ function dismissSplash() {
 /* ------------------------------------------------------------------ capabilities */
 
 async function loadCapabilities() {
-  const driveChip = el.capabilities.querySelector('[data-meta="drive"]');
-  const ocrChip = el.capabilities.querySelector('[data-meta="ocr"]');
+  let capabilities;
   try {
-    state.capabilities = await api("/api/capabilities");
-  } catch (error) {
-    driveChip.textContent = "Server unreachable";
-    driveChip.classList.add("is-warn");
-    ocrChip.hidden = true;
-    return;
+    capabilities = await api("/api/capabilities");
+  } catch {
+    capabilities = null;
   }
-  const caps = state.capabilities;
-  if (caps.drive_mode === "drive-api") {
-    driveChip.textContent = "Drive API key";
-    driveChip.classList.add("is-good");
-  } else {
-    driveChip.textContent = "Drive: public page mode";
-    driveChip.classList.add("is-warn");
-    driveChip.title = "No GOOGLE_API_KEY set. Listing works for public folders but file sizes are unknown.";
-  }
-  if (caps.ocr_available) {
-    ocrChip.textContent = `OCR: ${caps.ocr_languages.map((code) => LANGUAGE_NAMES[code] || code).join(", ")}`;
-    ocrChip.classList.add("is-good");
-  } else {
-    ocrChip.textContent = "OCR unavailable";
-    ocrChip.classList.add("is-warn");
-    ocrChip.title = "Tesseract was not found. Images and scanned PDFs cannot be processed.";
-  }
-  renderLanguageChips();
+  renderLanguageChips(capabilities);
 }
 
 /* ------------------------------------------------------------------ stage 1: link */
@@ -627,13 +604,14 @@ function updateSelection() {
   showError(el.runError, "");
 }
 
-function renderLanguageChips() {
-  const caps = state.capabilities;
+function renderLanguageChips(caps) {
   el.langChips.replaceChildren();
   if (!caps || !caps.ocr_available) {
     const note = document.createElement("p");
     note.className = "lang-note";
-    note.textContent = "OCR is not installed on the server. Native PDFs still work; images will fail and scanned pages stay empty.";
+    note.textContent = caps
+      ? "OCR is not installed on the server. Native PDFs still work; images will fail and scanned pages stay empty."
+      : "Could not check OCR availability. Reload the page to try again.";
     el.langChips.appendChild(note);
     return;
   }

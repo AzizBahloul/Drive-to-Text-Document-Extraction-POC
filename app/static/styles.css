@@ -181,20 +181,6 @@ a:hover { color: var(--blue-deep); }
 .mark-highlight { fill: var(--mark); }
 .mark-lines { stroke: var(--ink); stroke-width: 3.5; stroke-linecap: round; fill: none; }
 
-.topbar-meta { display: flex; gap: 8px; flex-wrap: wrap; }
-.meta-chip {
-  font-size: 13px;
-  color: var(--ink-2);
-  padding: 4px 10px;
-  border: 1px solid var(--rule);
-  border-radius: 999px;
-  background: var(--sheet);
-  transition: color var(--t-base), border-color var(--t-base);
-}
-.meta-chip.is-good { color: var(--ok); border-color: color-mix(in srgb, var(--ok) 40%, var(--rule)); }
-.meta-chip.is-warn { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 40%, var(--rule)); }
-
-.topbar-meta { margin-left: auto; }
 .theme-toggle {
   display: grid;
   place-items: center;
