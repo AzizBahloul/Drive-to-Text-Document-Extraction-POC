@@ -5,7 +5,6 @@ const LANGUAGE_NAMES = { eng: "English", fra: "French", ara: "Arabic" };
 const METHOD_LABELS = { "pdf-parser": "PDF parser", ocr: "OCR", mixed: "PDF parser + OCR" };
 const STAGES = ["link", "files", "batch", "results"];
 const TEXT_PREVIEW_LIMIT = 200_000;
-const REDUCED_MOTION = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 // The copy is English, so numbers are too: "3.941 characters" from an ar-TN browser reads as a decimal.
 const NUMBER = new Intl.NumberFormat("en");
 const formatCount = (value) => NUMBER.format(value);
@@ -26,7 +25,6 @@ const state = {
 
 const $ = (id) => document.getElementById(id);
 const el = {
-  splash: $("splash"),
   spineFill: $("spineFill"),
   linkForm: $("linkForm"),
   linkField: $("linkField"),
@@ -59,7 +57,6 @@ const el = {
   progress: $("progress"),
   progressFill: $("progressFill"),
   jobList: $("jobList"),
-  jobFold: $("jobFold"),
   resultsTitle: $("resultsTitle"),
   resultsSummary: $("resultsSummary"),
   exportLink: $("exportLink"),
@@ -167,7 +164,6 @@ function openStage(name, { scroll = true } = {}) {
   const section = document.getElementById(`stage-${name}`);
   if (section.hidden) {
     section.hidden = false;
-    void section.offsetHeight; // commit the closed state so the opening transition runs
     section.classList.add("is-open");
   }
   const index = STAGES.indexOf(name);
@@ -175,12 +171,8 @@ function openStage(name, { scroll = true } = {}) {
     node.classList.toggle("is-done", i < index);
     node.classList.toggle("is-current", i === index);
   });
-  el.spineFill.style.height = `${(index / (STAGES.length - 1)) * 100}%`;
-  if (scroll) {
-    setTimeout(() => {
-      section.scrollIntoView({ behavior: REDUCED_MOTION ? "auto" : "smooth", block: "start" });
-    }, 80);
-  }
+  el.spineFill.style.transform = `scaleY(${index / (STAGES.length - 1)})`;
+  if (scroll) section.scrollIntoView({ block: "start" });
 }
 
 /* Move focus to a stage's heading when it opens, so keyboard and screen-reader users land
@@ -196,19 +188,6 @@ function closeStagesAfter(name) {
     section.classList.remove("is-open");
     section.hidden = true;
   });
-}
-
-/* ------------------------------------------------------------------ splash */
-
-function dismissSplash() {
-  if (REDUCED_MOTION) {
-    el.splash.remove();
-    return;
-  }
-  setTimeout(() => {
-    el.splash.classList.add("is-leaving");
-    el.splash.addEventListener("transitionend", () => el.splash.remove(), { once: true });
-  }, 1500);
 }
 
 /* ------------------------------------------------------------------ capabilities */
@@ -247,21 +226,20 @@ el.linkForm.addEventListener("submit", async (event) => {
     state.folder = folder;
     state.files = folder.files;
     state.selected = new Set();
-    await show.done(folder.files.length);
-    if (run !== reel.run) return;
     renderFiles();
-    openStage("files");
-    focusHeading(el.filesTitle);
   } catch (error) {
-    show.stop();
     failLink(error.message);
+    return;
   } finally {
+    show.stop();
     if (run === reel.run) {
       setBusy(el.linkSubmit, false);
       el.linkField.classList.remove("is-busy");
       el.fetching.hidden = true;
     }
   }
+  openStage("files");
+  focusHeading(el.filesTitle);
 });
 
 // List a folder through the streaming endpoint: onFound(folderId, files) runs after each
@@ -311,13 +289,9 @@ async function scanFolder(url, onFound) {
   throw new Error("The connection dropped before the folder was fully read. Try again.");
 }
 
-/* The fetching card, an automatic slider of what the scan finds. While the first folder is
-   read it sweeps a blank page; then each document's first page is requested from Drive as soon
-   as the document is found, and slides in the moment it arrives, so the order on screen is the
-   order things were fetched. Once the scan is done the list opens after a few more pages. */
-const REEL_DWELL_MS = 650; // each page stays in front at least this long
-const REEL_LIMIT = 8; // once the scan is done, the list opens after this many pages in all
-const REEL_TAIL_MS = 4000; // ... or this long after the scan finished, whichever comes first
+/* Show thumbnails as they arrive while Drive is scanning. The file list opens when the scan
+   completes, regardless of which thumbnails have loaded. */
+const REEL_DWELL_MS = 220;
 const REEL_POOL = 24; // first pages requested at most, in the order documents are found
 const reel = { run: 0 };
 
@@ -332,35 +306,24 @@ function reelStart(run) {
 
   const arrived = [];
   let requested = 0;
-  let settled = 0;
   let found = 0;
-  let shown = 0;
   let lastShown = -Infinity;
-  let finishedAt = null;
-  let finish = null;
   let timer = 0;
-  const live = () => run === reel.run;
+  let stopped = false;
+  const live = () => !stopped && run === reel.run;
 
-  const step = () => {
-    if (!live()) return finish?.();
-    const now = performance.now();
-    if (arrived.length && now - lastShown >= REEL_DWELL_MS) {
+  const schedule = () => {
+    if (timer || !arrived.length) return;
+    const delay = Math.max(0, lastShown + REEL_DWELL_MS - performance.now());
+    timer = setTimeout(() => {
+      timer = 0;
+      if (!live()) return;
       const { file, src } = arrived.shift();
-      shown += 1;
-      lastShown = now;
+      lastShown = performance.now();
       reelShow(file, src);
-    }
-    if (finishedAt !== null) {
-      const nothingLeft = settled === requested && !arrived.length;
-      if (shown >= REEL_LIMIT || nothingLeft || now - finishedAt >= REEL_TAIL_MS) {
-        // Let the page in front be seen before the list replaces it.
-        timer = setTimeout(finish, shown ? Math.max(0, lastShown + REEL_DWELL_MS - now) : 0);
-        return;
-      }
-    }
-    timer = setTimeout(step, 50);
+      schedule();
+    }, delay);
   };
-  step();
 
   return {
     add(folderId, files) {
@@ -372,28 +335,18 @@ function reelStart(run) {
         requested += 1;
         const img = new Image();
         img.onload = () => {
-          settled += 1;
-          if (live()) arrived.push({ file, src: img.src });
-        };
-        img.onerror = () => {
-          settled += 1;
+          if (!live()) return;
+          arrived.push({ file, src: img.src });
+          schedule();
         };
         img.src = thumbUrl(file, folderId);
       }
     },
-    done(total) {
-      el.fetchReel.classList.remove("is-scanning");
-      el.fetchText.textContent = total
-        ? `Found ${plural(total, "document")}`
-        : "No documents in this folder";
-      finishedAt = performance.now();
-      return new Promise((resolve) => {
-        finish = resolve;
-      });
-    },
     stop() {
+      stopped = true;
       clearTimeout(timer);
-      el.fetchReel.classList.remove("is-scanning");
+      arrived.length = 0;
+      if (run === reel.run) el.fetchReel.classList.remove("is-scanning");
     },
   };
 }
@@ -424,15 +377,12 @@ function reelShow(file, src) {
     other.style.setProperty("--o", offset);
     other.classList.remove("is-current");
     if (other.classList.contains("is-blank")) other.classList.add("is-gone");
-    if (offset < -2 || other.classList.contains("is-gone")) setTimeout(() => other.remove(), 600);
+    if (offset < -2 || other.classList.contains("is-gone")) setTimeout(() => other.remove(), 170);
   }
   slide.classList.remove("is-incoming");
   slide.classList.add("is-current");
   slide.style.setProperty("--o", 0);
-  // Name the page once it is mostly in front, not while the previous one still is.
-  setTimeout(() => {
-    if (slide.classList.contains("is-current")) el.fetchName.textContent = filePath(file);
-  }, REDUCED_MOTION ? 0 : 140);
+  el.fetchName.textContent = filePath(file);
 }
 
 function failLink(message) {
@@ -691,7 +641,7 @@ function startBatch(batchId) {
   closeStagesAfter("files");
   el.jobList.replaceChildren();
   resetLive();
-  el.jobFold.classList.remove("is-folded");
+  el.jobList.hidden = false;
   el.batchTitle.textContent = "Extracting";
   el.batchSummary.textContent = "Starting the batch";
   el.progress.classList.remove("is-finished", "has-failures");
@@ -870,7 +820,7 @@ function snippetOf(text) {
 }
 
 function setProgress(percent) {
-  el.progressFill.style.width = `${percent}%`;
+  el.progressFill.style.transform = `scaleX(${percent / 100})`;
   el.progress.setAttribute("aria-valuenow", Math.round(percent));
 }
 
@@ -907,17 +857,14 @@ function finishBatch(batch) {
         ? `${plural(done, "file")} extracted in ${el.batchClock.textContent}.`
         : `${done} of ${total} extracted, ${plural(failed, "file")} failed. The reasons are in the results.`;
   }
+  setProgress(100);
   el.progress.classList.add("is-finished");
   el.progress.classList.toggle("has-failures", failed > 0);
+  resetLive();
+  el.jobList.hidden = true;
   renderResults(batch);
-  // Let the last files finish on screen, fold the list away, and put the results in its place.
-  afterLive(() => {
-    el.jobFold.classList.add("is-folded");
-    setTimeout(() => {
-      openStage("results");
-      focusHeading(el.resultsTitle);
-    }, REDUCED_MOTION ? 0 : LIVE_FOLD_MS);
-  });
+  openStage("results");
+  focusHeading(el.resultsTitle);
 }
 
 /* ------------------------------------------------------------------ stage 4: results */
@@ -955,15 +902,10 @@ function renderResults(batch) {
   if (el.copyAllButton) el.copyAllButton.disabled = !hasText;
 
   el.sheets.replaceChildren();
-  jobs.forEach((job, index) => {
-    const sheet = buildSheet(job);
-    sheet.style.transitionDelay = `${Math.min(index, 8) * 60}ms`;
-    el.sheets.appendChild(sheet);
-  });
+  jobs.forEach((job) => el.sheets.appendChild(buildSheet(job)));
   const first = el.sheets.querySelector(".sheet:not(.is-failed)");
   if (first) toggleSheet(first, true);
   updateToggleAllButton();
-  observeSheets();
 }
 
 function buildSheet(job) {
@@ -1065,26 +1007,6 @@ function updateToggleAllButton() {
   el.toggleAllSheetsButton.textContent = allOpen ? "Collapse all" : "Expand all";
 }
 
-function observeSheets() {
-  const sheets = el.sheets.querySelectorAll(".sheet");
-  if (REDUCED_MOTION || !("IntersectionObserver" in window)) {
-    sheets.forEach((sheet) => sheet.classList.add("is-visible"));
-    return;
-  }
-  const observer = new IntersectionObserver(
-    (entries) => {
-      entries.forEach((entry) => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add("is-visible");
-          observer.unobserve(entry.target);
-        }
-      });
-    },
-    { rootMargin: "0px 0px -8% 0px", threshold: 0.05 }
-  );
-  sheets.forEach((sheet) => observer.observe(sheet));
-}
-
 el.restartButton.addEventListener("click", () => {
   stopBatchStream();
   state.batch = null;
@@ -1093,7 +1015,7 @@ el.restartButton.addEventListener("click", () => {
   closeStagesAfter("link");
   el.linkInput.value = "";
   openStage("link");
-  setTimeout(() => el.linkInput.focus(), 400);
+  el.linkInput.focus({ preventScroll: true });
 });
 
 /* Results action buttons -------------------------------------------- */
@@ -1140,22 +1062,17 @@ if (el.retryFailedButton) {
     });
     updateSelection();
     closeStagesAfter("files");
-    openStage("files");
+    openStage("files", { scroll: false });
     focusHeading(el.filesTitle);
-    setTimeout(() => el.runButton.scrollIntoView({ behavior: "smooth", block: "nearest" }), 200);
+    el.runButton.scrollIntoView({ block: "nearest" });
   });
 }
 
 /* ------------------------------------------------------------------ live reading */
-/* While a file is processed its row opens onto what the server is reading right now: the
-   real page as rendered from the downloaded file, "Page 37 of 1,015", and the text that came
-   off that page. Frames come from `page` events. Each stays up at least FRAME_MIN_MS so fast
-   text-layer PDFs stay legible, and a row stays open at least LIVE_MIN_MS before it folds
-   back once its file is finished. */
+/* While a file is processed, show its latest page and text. Coalesce fast page updates
+   so a native PDF can't flash through every page at once. */
 
-const FRAME_MIN_MS = 180;
-const LIVE_MIN_MS = 900;
-const LIVE_FOLD_MS = 520; // --t-slow, the fold transition
+const FRAME_MIN_MS = 140;
 const live = new Map();
 
 function resetLive() {
@@ -1170,13 +1087,10 @@ function rowFor(id) {
 function liveView(id) {
   if (!live.has(id)) {
     live.set(id, {
-      openedAt: performance.now(),
-      shownAt: 0,
+      shownAt: -Infinity,
       page: 0,
       pending: null,
       timer: null,
-      finishing: false,
-      closed: false,
       imgSeq: 0,
       imgShown: 0,
     });
@@ -1187,7 +1101,6 @@ function liveView(id) {
 function liveUpdate(node, job) {
   if (job.status === "processing") {
     const view = liveView(job.id);
-    if (view.closed) return;
     if (!node.classList.contains("is-live")) {
       node.classList.add("is-live");
       setLiveImage(node, view, thumbUrl(job));
@@ -1203,9 +1116,9 @@ function liveUpdate(node, job) {
       if (job.progress) queueFrame(job.id, { ...job.progress, has_image: false, excerpt: "" });
     }
   } else if (live.has(job.id) && (job.status === "done" || job.status === "failed")) {
-    const view = live.get(job.id);
-    view.finishing = true;
-    tick(job.id);
+    clearTimeout(live.get(job.id).timer);
+    live.delete(job.id);
+    node.classList.remove("is-live");
   }
 }
 
@@ -1222,31 +1135,21 @@ function queueFrame(id, frame) {
   tick(id);
 }
 
-// Show the waiting frame when the current one has had its moment; fold the row when done.
+// Show the latest waiting frame once the current one has had time to render.
 function tick(id) {
   const view = live.get(id);
-  if (!view || view.closed) return;
+  if (!view?.pending) return;
   clearTimeout(view.timer);
   view.timer = null;
   const node = rowFor(id);
   if (!node) return;
-  let now = performance.now();
-  if (view.pending && now >= view.shownAt + FRAME_MIN_MS) {
-    showFrame(node, view, view.pending);
-    view.pending = null;
-    now = performance.now();
+  const delay = view.shownAt + FRAME_MIN_MS - performance.now();
+  if (delay > 0) {
+    view.timer = setTimeout(() => tick(id), delay);
+    return;
   }
-  let next = view.pending ? view.shownAt + FRAME_MIN_MS : 0;
-  if (!view.pending && view.finishing) {
-    const ready = Math.max(view.openedAt + LIVE_MIN_MS, view.shownAt + FRAME_MIN_MS);
-    if (now >= ready) {
-      view.closed = true;
-      node.classList.remove("is-live");
-      return;
-    }
-    next = ready;
-  }
-  if (next) view.timer = setTimeout(() => tick(id), Math.max(0, next - now));
+  showFrame(node, view, view.pending);
+  view.pending = null;
 }
 
 function showFrame(node, view, frame) {
@@ -1279,7 +1182,7 @@ function setLiveImage(node, view, url) {
   img.alt = "";
   img.decoding = "async";
   img.onload = () => {
-    if (seq < view.imgShown || !frame.isConnected) return;
+    if (seq < view.imgShown || live.get(node.dataset.id) !== view) return;
     view.imgShown = seq;
     const pages = frame.querySelectorAll(".live-img");
     for (let i = 0; i < pages.length - 1; i += 1) pages[i].remove(); // keep one beneath
@@ -1292,13 +1195,6 @@ function setLiveImage(node, view, url) {
 function pageUrl(id, page) {
   const batch = encodeURIComponent(state.batch?.batch_id || "");
   return `/api/batches/${batch}/files/${encodeURIComponent(id)}/pages/${page}/preview`;
-}
-
-// Run once every open row has folded back (or after a few seconds, whatever happens).
-function afterLive(callback, batchId = state.batch?.batch_id, deadline = performance.now() + 5000) {
-  if (state.batch?.batch_id !== batchId) return; // a new batch started meanwhile
-  if ([...live.values()].every((view) => view.closed) || performance.now() > deadline) callback();
-  else setTimeout(() => afterLive(callback, batchId, deadline), 120);
 }
 
 /* ------------------------------------------------------------------ spine follows scroll */
@@ -1322,8 +1218,6 @@ function trackScroll() {
 
 /* ------------------------------------------------------------------ boot */
 
-dismissSplash();
 loadCapabilities();
 trackScroll();
-if (!REDUCED_MOTION) setTimeout(() => el.linkInput.focus({ preventScroll: true }), 1700);
-else el.linkInput.focus({ preventScroll: true });
+el.linkInput.focus({ preventScroll: true });

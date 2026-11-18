@@ -15,20 +15,6 @@
 </head>
 <body>
 
-
-<div class="splash" id="splash" aria-hidden="true">
-  <svg class="splash-mark" viewBox="0 0 64 64" width="72" height="72" aria-hidden="true">
-    <rect class="splash-sheet" x="10" y="6" width="44" height="52" rx="4"/>
-    <path class="splash-fold" d="M40 6v14h14"/>
-    <rect class="splash-highlight" x="18" y="29" width="22" height="7"/>
-    <path class="splash-line" d="M18 24h16"/>
-    <path class="splash-line" d="M18 32.5h22"/>
-    <path class="splash-line" d="M18 41h20"/>
-    <path class="splash-line" d="M18 49h12"/>
-  </svg>
-  <p class="splash-word">Drive to Text</p>
-</div>
-
 <header class="topbar">
   <a class="brand" href="/" aria-label="Drive to Text, start over">
     <svg class="brand-mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
@@ -156,11 +142,7 @@
         <div class="progress" role="progressbar" id="progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Batch progress">
           <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="job-fold" id="jobFold">
-          <div class="job-fold-inner">
-            <ul class="job-list" id="jobList" aria-label="Files in this batch"></ul>
-          </div>
-        </div>
+        <ul class="job-list" id="jobList" aria-label="Files in this batch"></ul>
       </div>
     </section>
 
