@@ -39,6 +39,7 @@ def test_keeps_resource_key_when_present() -> None:
     ("url", "fragment"),
     [
         ("", "Paste"),
+        ("https://[drive.google.com", "malformed"),
         ("https://example.com/drive/folders/abc", "not a Google Drive link"),
         ("https://drive.google.com/file/d/1abcdefghijklmnop/view", "single file"),
         ("https://drive.google.com/drive/my-drive", "Could not find a folder id"),

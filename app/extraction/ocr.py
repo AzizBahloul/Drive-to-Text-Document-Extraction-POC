@@ -9,6 +9,7 @@ import re
 import shutil
 from itertools import pairwise
 from pathlib import Path
+from typing import cast
 
 import pytesseract
 from PIL import Image, ImageOps
@@ -97,7 +98,10 @@ def deskew(image: Image.Image) -> Image.Image:
     sample = image.resize(
         tuple(max(1, round(n * scale)) for n in image.size), Image.Resampling.BILINEAR
     )
-    low, high = sample.getextrema()
+    # The deskew score uses one intensity band. Pillow also supports multiband extrema.
+    if sample.mode != "L":
+        sample = ImageOps.grayscale(sample)
+    low, high = cast(tuple[int, int], sample.getextrema())
     if min(sample.size) < 32 or high - low < 32:
         return image
     # Dark text on light paper. A white margin avoids scoring artificial rotation edges.
@@ -183,8 +187,10 @@ def ocr_image(image: Image.Image, language: str, *, psm: int = 3, timeout: float
             alt_cleaned = clean_text(alt_text)
             if alt_cleaned:
                 return alt_cleaned
-        except Exception:
-            pass
+        except OcrTimeoutError:
+            raise
+        except Exception as exc:
+            log.debug("OCR contrast retry failed: %s", exc)
 
     return cleaned
 

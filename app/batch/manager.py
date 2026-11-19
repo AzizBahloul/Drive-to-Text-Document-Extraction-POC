@@ -213,15 +213,20 @@ class BatchManager:
             max_pages=self._settings.max_pdf_pages,
             time_limit_s=self._settings.file_time_limit_seconds,
         )
-        previewer = (
-            PagePreviewer(target, PAGE_PREVIEW_WIDTH)
-            if job.file.kind is FileKind.PDF
-            else contextlib.nullcontext(None)
-        )
-        # Extraction is CPU-bound (PDF rendering, Tesseract); keep the event loop free.
-        with previewer as pages:
-            reporter = PageReporter(self, batch, job, pages, asyncio.get_running_loop())
-            return await asyncio.to_thread(extract_file, target, job.file.kind, options, reporter)
+        loop = asyncio.get_running_loop()
+
+        def extract() -> ExtractionResult:
+            # Opening and closing a PDF preview also takes the PDFium lock.
+            previewer: PagePreviewer | contextlib.nullcontext[None]
+            if job.file.kind is FileKind.PDF:
+                previewer = PagePreviewer(target, PAGE_PREVIEW_WIDTH)
+            else:
+                previewer = contextlib.nullcontext(None)
+            with previewer as pages:
+                reporter = PageReporter(self, batch, job, pages, loop)
+                return extract_file(target, job.file.kind, options, reporter)
+
+        return await asyncio.to_thread(extract)
 
     def _page_reached(self, batch: Batch, job: FileJob, page: dict, image: bytes | None) -> None:
         """On the event loop: remember the page and its frame, and tell the subscribers."""

@@ -16,7 +16,7 @@ Built for the DI Xpertia technical assessment TA-2026-01.
   never stops the others.
 - Detects scanned PDF pages and OCRs them automatically, page by page, so mixed documents work.
 - OCR in English, French and Arabic, alone or combined.
-- Shows the text, method, pages, characters and time for each file, and exports the batch as JSON.
+- Shows the text, method, pages, characters and time for each file, and exports the batch as JSON, plain text or a ZIP archive.
 - Shows the real documents: while the folder is read, the first page of each document slides
   in as soon as it is found and fetched; the file list has Drive thumbnails; and while a batch runs, each
   file opens onto the page being read at that moment ("Page 37 of 1,015"), with the text taken
@@ -55,7 +55,7 @@ drive link -> list files -> select -> batch
    |     page with text    -> kept as is                       (pdf-parser)
    |     page without text -> rendered at 300 dpi -> deskewed if needed -> Tesseract (ocr)
    `- PNG / JPEG   -> Tesseract                                (ocr)
-results -> text per file, live status, JSON export
+results -> text per file, live status, JSON / TXT / ZIP export
 ```
 
 A PDF whose pages all have text is reported as `pdf-parser`, an image or fully scanned PDF as
@@ -81,7 +81,7 @@ app/
 ## Google Drive access
 
 - **No key (default):** reads the public folder page. Works out of the box, but sizes are not
-  shown and very large folders are cut at 50 entries.
+  shown and large folders may show only the entries included in the public page.
 - **Public Drive API:** Enable the Google Drive API in Google Cloud and set `GOOGLE_API_KEY` in
   `.env`. This enables paginated listing, file sizes and direct downloads. Folder scanning still
   follows the configured depth and folder limits.
@@ -122,7 +122,9 @@ Everything is optional. Copy `.env.example` to `.env` to change it. The most use
 
 ## Output
 
-`GET /api/batches/{id}/export` (the "Download JSON" button) returns one entry per file:
+The **JSON** button calls `GET /api/batches/{id}/export` and returns a batch summary with
+one entry per file. Use `?format=txt` for a single text file or `?format=zip` for a
+manifest and individual text files. A JSON file entry looks like this:
 
 ```json
 {
@@ -139,7 +141,7 @@ A full example is in [`samples/sample-output.json`](samples/sample-output.json).
 ## Tests
 
 ```bash
-pytest                                      # about 180 tests, a few seconds
+pytest
 ruff check app tests && ruff format --check app tests
 ```
 

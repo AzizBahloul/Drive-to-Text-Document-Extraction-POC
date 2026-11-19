@@ -1086,7 +1086,7 @@ if (el.toggleAllSheetsButton) {
 
 if (el.retryFailedButton) {
   el.retryFailedButton.addEventListener("click", () => {
-    // Pre-select only the failed files and go back to stage 2 to re-run.
+    // Preselect only the failed files and go back to stage 2 to re-run.
     const failedIds = [...state.jobs.values()]
       .filter((job) => job.status === "failed")
       .map((job) => job.id);

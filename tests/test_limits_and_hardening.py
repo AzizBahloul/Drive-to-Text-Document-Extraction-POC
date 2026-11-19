@@ -330,21 +330,19 @@ def test_virus_scan_warning_confirmation_url_extracted() -> None:
 
 
 def test_corrupted_page_in_pdf_is_skipped_gracefully(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    two_page_scan: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    path = tmp_path / "corrupt_page.pdf"
-    path.write_bytes(build_text_pdf(["Page 1 content", "Page 2 content"]))
+    texts = iter([RuntimeError("Corrupt page"), "Second page is readable"])
 
-    orig_page_text = pdf_parser.page_text
+    def read_page(page):
+        text = next(texts)
+        if isinstance(text, Exception):
+            raise text
+        return text
 
-    def fail_page_2(page):
-        if "Page 2" in orig_page_text(page):
-            raise RuntimeError("Corrupted font or stream on page 2")
-        return orig_page_text(page)
-
-    monkeypatch.setattr(pdf_parser, "page_text", fail_page_2)
-    sources = list(pdf_parser.iter_page_sources(path, min_chars=5, dpi=72))
-    assert len(sources) == 1  # our test pdf has 1 page in build_text_pdf fixture
+    monkeypatch.setattr(pdf_parser, "page_text", read_page)
+    sources = list(pdf_parser.iter_page_sources(two_page_scan, min_chars=5, dpi=72))
+    assert sources == [(1, "", None), (2, "Second page is readable", None)]
 
 
 def test_hsts_header_set_over_https(client: TestClient) -> None:
