@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "drive-to-text"
 version = "0.1.0"
-description = "List PDFs and images in a public Google Drive folder and extract their text with a PDF parser or OCR."
+description = "List PDFs and images from public or authorized private Google Drive folders and extract their text with a PDF parser or OCR."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { file = "LICENSE" }
@@ -30,6 +30,9 @@ dev = [
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["static/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

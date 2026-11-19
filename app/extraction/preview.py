@@ -9,9 +9,11 @@ from __future__ import annotations
 import io
 import logging
 import math
+from contextlib import AbstractContextManager
 from pathlib import Path
 from types import TracebackType
 
+import pypdfium2 as pdfium
 from PIL import Image, ImageOps, UnidentifiedImageError
 
 from app.drive.client import FileKind
@@ -67,8 +69,8 @@ class PagePreviewer:
     def __init__(self, path: Path, width: int = PREVIEW_WIDTH) -> None:
         self._path = path
         self._width = width
-        self._document = None
-        self._context = None
+        self._document: pdfium.PdfDocument | None = None
+        self._context: AbstractContextManager[pdfium.PdfDocument] | None = None
 
     def __enter__(self) -> PagePreviewer:
         try:
@@ -129,13 +131,14 @@ def _render_pdf_page(document, index: int, width: int) -> Image.Image:
 
 def _open_image(data: bytes) -> Image.Image:
     try:
-        image = Image.open(io.BytesIO(data))
+        source = Image.open(io.BytesIO(data))
     except UnidentifiedImageError as exc:
         raise ValueError("not an image") from exc
-    width, height = image.size
-    if width * height > MAX_SOURCE_PIXELS:
-        raise ValueError(f"{width} x {height} is too large to preview")
-    image.draft("RGB", (PREVIEW_WIDTH, PREVIEW_WIDTH * 3))  # JPEG: decode at a reduced size
-    image = ImageOps.exif_transpose(image)
+    with source:
+        width, height = source.size
+        if width * height > MAX_SOURCE_PIXELS:
+            raise ValueError(f"{width} x {height} is too large to preview")
+        source.draft("RGB", (PREVIEW_WIDTH, PREVIEW_WIDTH * 3))  # JPEG: decode at a reduced size
+        image = ImageOps.exif_transpose(source)
     image.thumbnail((PREVIEW_WIDTH, PREVIEW_WIDTH * 3))
     return image

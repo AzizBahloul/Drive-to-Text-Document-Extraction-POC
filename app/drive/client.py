@@ -614,57 +614,60 @@ class DriveClient:
         max_bytes: int,
         file: DriveFile,
     ) -> int:
-        written = 0
-        async with self._http.stream(
-            "GET", url, headers=headers, follow_redirects=not headers
-        ) as response:
-            if response.is_redirect and headers:
-                location = response.headers.get("location", "")
-                target = httpx.URL(url).join(location)
-                if target.scheme == "https" and target.host.endswith(".googleusercontent.com"):
-                    return await self._stream_to(str(target), {}, destination, max_bytes, file)
-                raise DriveError("upstream", "Drive returned an unexpected download redirect.")
-            if response.status_code != 200:
-                await response.aread()
-                raise DriveError(
-                    "not_found" if response.status_code in {403, 404} else "upstream",
-                    f"Google Drive refused the download (HTTP {response.status_code}).",
-                )
-            content_type = response.headers.get("content-type", "")
-            if content_type.startswith("text/html"):
-                html_body = (await response.aread()).decode("utf-8", errors="replace")
-                confirm_url = _extract_confirm_download_url(url, html_body)
-                if (
-                    confirm_url
-                    and not headers
-                    and httpx.URL(confirm_url).host
-                    in {"drive.google.com", "drive.usercontent.google.com"}
-                    and httpx.URL(confirm_url).scheme == "https"
-                ):
-                    log.info(
-                        "Detected Google Drive virus scan warning page; following confirmation link"
+        allow_confirmation = self.mode == "public-page"
+        for _ in range(6):
+            async with self._http.stream("GET", url, headers=headers, follow_redirects=False) as r:
+                if r.has_redirect_location:
+                    url = _download_target(url, r.headers["location"])
+                    headers = {}
+                    continue
+                if r.status_code != 200:
+                    raise DriveError(
+                        "not_found" if r.status_code in {403, 404} else "upstream",
+                        f"Google Drive refused the download (HTTP {r.status_code}).",
                     )
-                    async with self._http.stream("GET", confirm_url, headers=headers) as conf_resp:
-                        if conf_resp.status_code == 200 and not conf_resp.headers.get(
-                            "content-type", ""
-                        ).startswith("text/html"):
-                            with destination.open("wb") as handle:
-                                async for chunk in _iter_limited(
-                                    conf_resp.aiter_bytes(), max_bytes, file
-                                ):
-                                    handle.write(chunk)
-                                    written += len(chunk)
-                            return written
-                raise DriveError(
-                    "forbidden",
-                    "Google Drive returned a web page instead of the file. "
-                    "The file may not be shared publicly or needs a manual download.",
-                )
-            with destination.open("wb") as handle:
-                async for chunk in _iter_limited(response.aiter_bytes(), max_bytes, file):
-                    handle.write(chunk)
-                    written += len(chunk)
-        return written
+                if r.headers.get("content-type", "").lower().startswith("text/html"):
+                    if allow_confirmation:
+                        allow_confirmation = False
+                        body = bytearray()
+                        async for chunk in r.aiter_bytes(chunk_size=8192):
+                            body.extend(chunk)
+                            if len(body) >= 131072:
+                                break
+                        target = _extract_confirm_download_url(url, body.decode(errors="replace"))
+                        if target:
+                            url = _download_target(url, target)
+                            headers = {}
+                            continue
+                    raise DriveError(
+                        "forbidden",
+                        "Drive returned a web page. Check sharing or download the file manually.",
+                    )
+                written = 0
+                with destination.open("wb") as handle:
+                    async for chunk in _iter_limited(r.aiter_bytes(), max_bytes, file):
+                        handle.write(chunk)
+                        written += len(chunk)
+                return written
+        raise DriveError("upstream", "Google Drive returned too many download redirects.")
+
+
+def _download_target(base: str, location: str) -> str:
+    try:
+        target = httpx.URL(base).join(location)
+        if (
+            target.scheme == "https"
+            and not target.userinfo
+            and target.port in {None, 443}
+            and (
+                target.host in {"drive.google.com", "drive.usercontent.google.com"}
+                or target.host.endswith(".googleusercontent.com")
+            )
+        ):
+            return str(target)
+    except (ValueError, httpx.InvalidURL):
+        pass
+    raise DriveError("upstream", "Drive returned an unexpected download destination.")
 
 
 def _describe(exc: Exception) -> str:

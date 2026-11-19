@@ -248,3 +248,29 @@ async def test_public_strategy_lists_through_http() -> None:
     listing = await public_client(handler).list_folder(FOLDER)
     assert listing.source == "public-page" and len(listing.files) == 4
     assert json.loads(json.dumps(listing.files[0].to_dict()))["kind"] == "pdf"
+
+
+async def test_download_follows_drive_redirect_without_api_key(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.host == "www.googleapis.com":
+            return httpx.Response(302, headers={"Location": "https://docs.googleusercontent.com/a"})
+        assert request.url.host == "docs.googleusercontent.com"
+        assert "X-Goog-Api-Key" not in request.headers
+        return httpx.Response(200, content=b"file")
+
+    target = tmp_path / "report.pdf"
+    await api_client(handler).download(
+        drive_file("report.pdf", FileKind.PDF), target, max_bytes=4096
+    )
+    assert target.read_bytes() == b"file"
+
+
+async def test_download_rejects_unrecognized_redirect_before_following(tmp_path: Path) -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.host == "drive.usercontent.google.com"
+        return httpx.Response(302, headers={"Location": "https://example.org/file"})
+
+    with pytest.raises(DriveError, match="unexpected download destination"):
+        await public_client(handler).download(
+            drive_file("a.pdf", FileKind.PDF), tmp_path / "a.pdf", max_bytes=4096
+        )

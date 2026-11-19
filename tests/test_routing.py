@@ -130,3 +130,23 @@ def test_without_ocr_scanned_pages_are_left_empty_with_a_warning(scanned_pdf: Pa
     result = extract_file(scanned_pdf, FileKind.PDF, ExtractionOptions(ocr_language=None))
     assert result.pages[0].text == ""
     assert any("OCR is not available" in warning for warning in result.warnings)
+
+
+@pytest.mark.parametrize("mode", ["unavailable", "empty", "timeout"])
+def test_sparse_pdf_text_survives_ocr_fallback(tmp_path, monkeypatch, mode):
+    from tests.conftest import build_text_pdf
+
+    path = tmp_path / "ticket.pdf"
+    path.write_bytes(build_text_pdf(["AB-123"]))
+
+    def read(image, language, **kwargs):
+        if mode == "timeout":
+            raise router.ocr_engine.OcrTimeoutError
+        return ""
+
+    monkeypatch.setattr(router.ocr_engine, "ocr_image", read)
+    options = ExtractionOptions(ocr_language=None if mode == "unavailable" else "eng")
+    events = []
+    result = extract_file(path, FileKind.PDF, options, events.append)
+    assert result.text == events[-1].text == "AB-123"
+    assert result.method == events[-1].method == Method.PDF_PARSER

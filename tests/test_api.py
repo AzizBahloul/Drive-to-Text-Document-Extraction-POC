@@ -185,3 +185,29 @@ def test_native_pdfs_still_run_when_tesseract_is_missing(
     assert export["ocr_language"] is None
     assert export["files"][0]["status"] == "done"
     assert export["files"][0]["method"] == "pdf-parser"
+
+
+def test_zip_preserves_nested_folders_and_disambiguates_names(client: TestClient) -> None:
+    import io
+    import zipfile
+    from dataclasses import replace
+
+    drive = client.app.state.drive
+    drive.files = [
+        replace(drive_file(name, FileKind.PDF, file_id=file_id), folder="Reports/../May")
+        for name, file_id in [("May:01.pdf", "file-one"), ("may?01.pdf", "file-two")]
+    ]
+    assert client.post("/api/folders", json={"url": FOLDER}).status_code == 200
+    created = client.post(
+        "/api/batches", json={"folder_id": FOLDER, "file_ids": ["file-one", "file-two"]}
+    )
+    assert created.status_code == 202
+    batch = f"/api/batches/{created.json()['batch_id']}"
+    assert client.get(batch + "/events").status_code == 200
+    response = client.get(batch + "/export?format=zip")
+    with zipfile.ZipFile(io.BytesIO(response.content)) as archive:
+        assert set(archive.namelist()) == {
+            "manifest.json",
+            "Reports/_/May/May_01.txt",
+            "Reports/_/May/may_01 (2).txt",
+        }

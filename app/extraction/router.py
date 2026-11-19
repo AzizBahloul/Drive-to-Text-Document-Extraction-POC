@@ -66,17 +66,6 @@ def _report(on_page: PageCallback | None, event: PageEvent) -> None:
         log.exception("Page progress callback failed")
 
 
-def _ocr_done(on_page: PageCallback, number: int, total: int) -> Callable[[Future], None]:
-    """Report an OCR'd page once Tesseract returns (runs on the OCR thread)."""
-
-    def callback(future: Future[tuple[str, bool]]) -> None:
-        if future.cancelled() or future.exception() is not None:
-            return  # the failure surfaces through the extraction itself
-        _report(on_page, PageEvent(number, total, Method.OCR, future.result()[0]))
-
-    return callback
-
-
 def extract_file(
     path: Path,
     kind: FileKind,
@@ -135,17 +124,22 @@ def extract_pdf(
     deadline = time.monotonic() + options.time_limit_s if options.time_limit_s else None
     workers = max(1, options.ocr_workers)
 
-    def run_ocr(image: Image.Image) -> tuple[str, bool]:
+    def run_ocr(number: int, image: Image.Image, native: str) -> tuple[PageResult, bool]:
         language = options.ocr_language
-        assert language is not None  # pages only reach OCR when Tesseract is installed
+        assert language is not None
+        timed_out = False
         try:
             text = ocr_engine.ocr_image(image, language, timeout=options.ocr_timeout_s)
-            return text, False
         except ocr_engine.OcrTimeoutError:
-            return "", True
+            text = ""
+            timed_out = True
+        method = Method.PDF_PARSER if native and not text.strip() else Method.OCR
+        page = PageResult(number, method, native if method is Method.PDF_PARSER else text)
+        _report(on_page, PageEvent(number, shown_total, page.method, page.text))
+        return page, timed_out
 
-    slots: list[tuple[int, str | Future[tuple[str, bool]]]] = []
-    in_flight: deque[Future[tuple[str, bool]]] = deque()
+    slots: list[PageResult | Future[tuple[PageResult, bool]]] = []
+    in_flight: deque[Future[tuple[PageResult, bool]]] = deque()
     stopped_early = ""
     no_ocr: list[int] = []
     sources = pdf_parser.iter_page_sources(
@@ -153,6 +147,7 @@ def extract_pdf(
         min_chars=options.min_chars_per_page,
         dpi=options.render_dpi,
         max_pixels=ocr_engine.MAX_PIXELS,
+        render=options.ocr_language is not None,
     )
     with (
         ThreadPoolExecutor(max_workers=workers, thread_name_prefix="ocr") as pool,
@@ -160,22 +155,20 @@ def extract_pdf(
     ):
         for number, text, image in sources:
             if image is None:
-                slots.append((number, text))
+                if options.ocr_language is None and not pdf_parser.has_text_layer(
+                    text, options.min_chars_per_page
+                ):
+                    no_ocr.append(number)
+                slots.append(PageResult(number, Method.PDF_PARSER, text))
                 _report(on_page, PageEvent(number, shown_total, Method.PDF_PARSER, text))
-            elif options.ocr_language is None:
-                slots.append((number, ""))
-                no_ocr.append(number)
-                _report(on_page, PageEvent(number, shown_total, Method.OCR, ""))
             else:
                 # Rendered pages wait in memory until OCR'd: never run far ahead of Tesseract.
                 while len(in_flight) >= workers * 2:
                     in_flight.popleft().result()
                 _report(on_page, PageEvent(number, shown_total, Method.OCR, None))
-                future = pool.submit(run_ocr, image)
-                if on_page is not None:
-                    future.add_done_callback(_ocr_done(on_page, number, shown_total))
+                future = pool.submit(run_ocr, number, image, text)
                 in_flight.append(future)
-                slots.append((number, future))
+                slots.append(future)
             if number >= total:
                 break
             if options.max_pages and len(slots) >= options.max_pages:
@@ -193,14 +186,14 @@ def extract_pdf(
 
     pages: list[PageResult] = []
     timed_out: list[int] = []
-    for number, value in slots:
-        if isinstance(value, str):
-            pages.append(PageResult(number=number, method=Method.PDF_PARSER, text=value))
-            continue
-        text, was_timed_out = value.result()
-        if was_timed_out:
-            timed_out.append(number)
-        pages.append(PageResult(number=number, method=Method.OCR, text=text))
+    for slot in slots:
+        if isinstance(slot, PageResult):
+            pages.append(slot)
+        else:
+            page, was_timed_out = slot.result()
+            pages.append(page)
+            if was_timed_out:
+                timed_out.append(page.number)
 
     result = ExtractionResult.from_pages(pages, options.ocr_language)
     if not pages:
@@ -209,21 +202,22 @@ def extract_pdf(
         result.warnings.append("No text was found on any page.")
     ocr_pages = sum(1 for page in pages if page.method is Method.OCR)
     if ocr_pages and ocr_pages < len(pages):
-        result.warnings.append(
-            f"{ocr_pages} of {len(pages)} page(s) had no text layer and were sent to OCR."
-        )
+        result.warnings.append(f"{ocr_pages} of {len(pages)} page(s) were read with OCR.")
     elif ocr_pages and len(pages) > 0:
-        result.warnings.append("No text layer found; the whole document was processed with OCR.")
+        result.warnings.append(
+            "No text layer met the minimum length. The whole document was read with OCR."
+        )
     if timed_out:
         listed = ", ".join(str(n) for n in timed_out[:10])
         more = "…" if len(timed_out) > 10 else ""
         result.warnings.append(
-            f"OCR timed out on {len(timed_out)} page(s) ({listed}{more}); they are left empty."
+            f"OCR timed out on {len(timed_out)} page(s) ({listed}{more}). "
+            "Available PDF text was kept."
         )
     if no_ocr:
         result.warnings.append(
-            f"{len(no_ocr)} page(s) have no text layer and OCR is not available on the "
-            "server; they are left empty."
+            f"{len(no_ocr)} page(s) fell below the text threshold and OCR is not available. "
+            "Available PDF text was kept."
         )
     if stopped_early:
         result.warnings.append(stopped_early)

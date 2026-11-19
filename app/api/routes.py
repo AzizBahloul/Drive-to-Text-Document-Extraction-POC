@@ -5,15 +5,17 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
+import re
 from collections import OrderedDict
 from collections.abc import AsyncIterator
-from pathlib import Path
+from dataclasses import dataclass
+from pathlib import PurePosixPath
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
-from app.api.drive_session import COOKIE, session
+from app.api.drive_session import COOKIE, DriveSession, session
 from app.api.schemas import (
     BatchCreated,
     BatchRequest,
@@ -98,12 +100,22 @@ def image_response(data: bytes) -> Response:
     return Response(data, media_type="image/jpeg", headers=headers)
 
 
-def get_drive(request: Request) -> DriveClient:
+@dataclass(frozen=True)
+class DriveAccess:
+    drive: DriveClient
+    listings: dict[str, tuple[FolderListing, str | None]]
+    private: DriveSession | None
+
+
+def drive_access(request: Request) -> DriveAccess:
+    """Resolve credentials and their listing cache together on the event loop."""
     current = session(request)
-    return current.drive if current else request.app.state.drive
+    if current:
+        return DriveAccess(current.drive, current.listings, current)
+    return DriveAccess(request.app.state.drive, request.app.state.listings, None)
 
 
-def get_manager(request: Request) -> BatchManager:
+async def get_manager(request: Request) -> BatchManager:
     manager = request.app.state.batches
     batch_id = request.path_params.get("batch_id")
     if batch_id:
@@ -116,14 +128,7 @@ def get_manager(request: Request) -> BatchManager:
     return manager
 
 
-def get_listings(request: Request) -> dict[str, tuple[FolderListing, str | None]]:
-    current = session(request)
-    return current.listings if current else request.app.state.listings
-
-
-Drive = Annotated[DriveClient, Depends(get_drive)]
 Manager = Annotated[BatchManager, Depends(get_manager)]
-Listings = Annotated[dict[str, tuple[FolderListing, str | None]], Depends(get_listings)]
 AppSettings = Annotated[Settings, Depends(get_settings)]
 
 
@@ -134,14 +139,13 @@ def drive_error_response(exc: DriveError) -> JSONResponse:
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse)
-async def capabilities(
-    request: Request, drive: Drive, settings: AppSettings
-) -> CapabilitiesResponse:
+async def capabilities(request: Request, settings: AppSettings) -> CapabilitiesResponse:
+    access = drive_access(request)
     languages = list(ocr_engine.installed_languages())
     return CapabilitiesResponse(
         private_drive_available=bool(settings.google_oauth_client_id),
-        private_drive_mode=current.mode if (current := session(request)) else None,
-        drive_mode=drive.mode,
+        private_drive_mode=access.private.mode if access.private else None,
+        drive_mode=access.drive.mode,
         ocr_available=bool(languages),
         ocr_languages=languages,
         ocr_default_language=settings.ocr_default_language,
@@ -178,29 +182,28 @@ async def picked_files(request: Request) -> FolderResponse:
     return folder_response(DriveFolderLink(current.picked.folder_id), current.picked)
 
 
-def check_folder_access(request: Request) -> None:
-    current = session(request)
-    if current and current.mode == "files":
+def folder_access(request: Request) -> DriveAccess:
+    access = drive_access(request)
+    if access.private and access.private.mode == "files":
         raise HTTPException(403, "Connect with private folder access to list a folder.")
+    return access
 
 
 @router.post("/folders", response_model=FolderResponse, responses=FOLDER_ERRORS)
 async def resolve_folder(
     request: Request,
     body: FolderRequest,
-    drive: Drive,
-    listings: Listings,
     settings: AppSettings,
 ) -> FolderResponse:
-    check_folder_access(request)
+    access = folder_access(request)
     link = parse_folder_link(body.url)
-    listing = await drive.list_tree(
+    listing = await access.drive.list_tree(
         link.folder_id,
         link.resource_key,
         depth=settings.subfolder_depth,
         max_folders=settings.max_folders,
     )
-    remember_listing(listings, link, listing)
+    remember_listing(access.listings, link, listing)
     return folder_response(link, listing)
 
 
@@ -212,8 +215,6 @@ async def resolve_folder(
 async def scan_folder(
     request: Request,
     body: FolderRequest,
-    drive: Drive,
-    listings: Listings,
     settings: AppSettings,
 ) -> Response:
     """List a folder like ``POST /folders``, streaming the documents as each folder is read.
@@ -225,21 +226,21 @@ async def scan_folder(
     plain JSON error with its status code. Thumbnails of the documents found so far can be
     requested while the scan goes on.
     """
-    check_folder_access(request)
+    access = folder_access(request)
     link = parse_folder_link(body.url)
     events: asyncio.Queue[dict] = asyncio.Queue()
     found: list[DriveFile] = []
 
     def on_found(files: tuple[DriveFile, ...]) -> None:
         found.extend(files)
-        partial = FolderListing(link.folder_id, None, tuple(found), drive.mode)
-        remember_listing(listings, link, partial)
+        partial = FolderListing(link.folder_id, None, tuple(found), access.drive.mode)
+        remember_listing(access.listings, link, partial)
         files_out = [file.to_dict() for file in files]
         events.put_nowait({"type": "found", "folder_id": link.folder_id, "files": files_out})
 
     async def scan() -> None:
         try:
-            listing = await drive.list_tree(
+            listing = await access.drive.list_tree(
                 link.folder_id,
                 link.resource_key,
                 depth=settings.subfolder_depth,
@@ -253,7 +254,7 @@ async def scan_folder(
             failure = DriveError("upstream", "The folder could not be read. Try again.")
             events.put_nowait({"type": "error", "exc": failure})
         else:
-            remember_listing(listings, link, listing)
+            remember_listing(access.listings, link, listing)
             response = folder_response(link, listing)
             events.put_nowait({"type": "done", "folder": response.model_dump()})
 
@@ -285,16 +286,15 @@ async def scan_folder(
     response_class=Response,
     responses=NO_IMAGE,
 )
-async def file_thumbnail(
-    folder_id: str, file_id: str, request: Request, drive: Drive, listings: Listings
-) -> Response:
+async def file_thumbnail(folder_id: str, file_id: str, request: Request) -> Response:
     """Drive's thumbnail of a listed file, fetched by the server and re-encoded as JPEG."""
     # Only files of a folder this server listed: the route is not a proxy for any Drive id.
-    listing, folder_key = listings.get(folder_id, (None, None))
+    access = drive_access(request)
+    listing, folder_key = access.listings.get(folder_id, (None, None))
     file = next((file for file in listing.files if file.id == file_id), None) if listing else None
     if not file:
         raise HTTPException(404, "List the folder first; this file is not in it.")
-    if session(request):
+    if access.private:
         raise HTTPException(404, "A private preview is available after download.")
     cache: ThumbnailCache = request.app.state.thumbnails
     found, image = cache.get(file_id)
@@ -302,7 +302,7 @@ async def file_thumbnail(
         async with cache.fetching:
             try:
                 image = reencode_thumbnail(
-                    await drive.thumbnail(file_id, file.resource_key or folder_key)
+                    await access.drive.thumbnail(file_id, file.resource_key or folder_key)
                 )
                 cache.put(file_id, image)
             except DriveError as exc:
@@ -318,14 +318,13 @@ async def file_thumbnail(
 @router.post("/batches", response_model=BatchCreated, status_code=202, responses=BATCH_ERRORS)
 async def create_batch(
     request: Request,
-    drive: Drive,
     body: BatchRequest,
     manager: Manager,
-    listings: Listings,
     settings: AppSettings,
 ) -> BatchCreated:
+    access = drive_access(request)
     try:
-        listing, resource_key = listings[body.folder_id]
+        listing, resource_key = access.listings[body.folder_id]
     except KeyError:
         raise HTTPException(400, "List the folder before starting a batch.") from None
     by_id = {file.id: file for file in listing.files}
@@ -353,8 +352,8 @@ async def create_batch(
                 if listing.source == "drive-picker"
                 else f"https://drive.google.com/drive/folders/{listing.folder_id}"
             ),
-            drive=drive,
-            owner=request.cookies[COOKIE] if session(request) else None,
+            drive=access.drive,
+            owner=request.cookies[COOKIE] if access.private else None,
             folder_name=listing.name,
             files=files,
             ocr_language=language,
@@ -444,6 +443,14 @@ async def cancel_batch(batch_id: str, manager: Manager) -> dict:
     return batch.to_dict(include_text=False)
 
 
+def archive_component(name: str) -> str:
+    """Make one portable file or directory name from a Drive display name."""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", name).strip(" .") or "_"
+    if re.fullmatch(r"(?:CON|PRN|AUX|NUL|(?:COM|LPT)[1-9¹²³])", name.split(".")[0], re.I):
+        name = "_" + name
+    return name
+
+
 @router.get("/batches/{batch_id}/export", responses=UNKNOWN_BATCH)
 async def export_batch(
     batch_id: str, manager: Manager, format: ExportFormat = ExportFormat.JSON
@@ -492,16 +499,20 @@ async def export_batch(
             seen_paths: set[str] = {"manifest.json"}
             for job in batch.jobs.values():
                 if job.result and job.result.text:
-                    rel_dir = job.file.folder.strip("/") if job.file.folder else ""
-                    stem = Path(job.file.name).stem or "document"
+                    rel_dir = "/".join(
+                        archive_component(part)
+                        for part in (job.file.folder or "").split("/")
+                        if part
+                    )
+                    stem = archive_component(PurePosixPath(archive_component(job.file.name)).stem)
                     base_name = f"{stem}.txt"
                     zip_path = f"{rel_dir}/{base_name}" if rel_dir else base_name
                     counter = 1
-                    while zip_path in seen_paths:
+                    while zip_path.casefold() in seen_paths:
                         counter += 1
                         suffixed = f"{stem} ({counter}).txt"
                         zip_path = f"{rel_dir}/{suffixed}" if rel_dir else suffixed
-                    seen_paths.add(zip_path)
+                    seen_paths.add(zip_path.casefold())
                     zf.writestr(zip_path, job.result.text)
         filename = f"drive-to-text-{batch.id}.zip"
         return Response(

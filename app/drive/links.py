@@ -39,8 +39,11 @@ def parse_folder_link(raw: str) -> DriveFolderLink:
 
     if "://" not in value:
         value = "https://" + value
-    parsed = urlparse(value)
-    host = (parsed.hostname or "").lower()
+    try:
+        parsed = urlparse(value)
+        host = (parsed.hostname or "").lower()
+    except ValueError as exc:
+        raise DriveError("invalid_link", "That Google Drive URL is malformed.") from exc
     if host not in _ALLOWED_HOSTS:
         raise DriveError(
             "invalid_link",
@@ -54,7 +57,7 @@ def parse_folder_link(raw: str) -> DriveFolderLink:
         )
 
     query = parse_qs(parsed.query)
-    resource_key = (query.get("resourcekey") or [None])[0]
+    resource_key = next(iter(query.get("resourcekey", [])), None)
     if resource_key is not None and not _RESOURCE_KEY.match(resource_key):
         # It is sent upstream as a header value; refuse anything but the documented alphabet.
         raise DriveError("invalid_link", "The resourcekey in that link is not valid.")
