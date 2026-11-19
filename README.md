@@ -9,21 +9,20 @@ Built for the DI Xpertia technical assessment TA-2026-01.
 
 ## Features
 
-- Accepts every public folder link shape (`/drive/folders/<id>`, `/drive/u/0/folders/<id>`,
-  `/open?id=<id>`, with or without `?usp=sharing`), and supports private folders after Google authorization.
+- Accepts public folder links in the forms `/drive/folders/<id>`, `/drive/u/0/folders/<id>`,
+  and `/open?id=<id>`, with or without `?usp=sharing`. Private folders require Google authorization.
 - Lists the PDF, PNG and JPEG files in the folder and its subfolders.
 - Processes the selected files in parallel, with live per-file progress. One failing file
   never stops the others.
 - Detects scanned PDF pages and OCRs them automatically, page by page, so mixed documents work.
 - OCR in English, French and Arabic, alone or combined.
 - Shows the text, method, pages, characters and time for each file, and exports the batch as JSON, plain text or a ZIP archive.
-- Shows the real documents: while the folder is read, the first page of each document slides
-  in as soon as it is found and fetched; the file list has Drive thumbnails; and while a batch runs, each
-  file opens onto the page being read at that moment ("Page 37 of 1,015"), with the text taken
-  from it. When the batch is done the list folds away and the results take its place.
+- Shows Drive thumbnails and first-page previews as files are found. During extraction, the
+  preview shows the current page and its extracted text. Results replace the file list when
+  the batch finishes.
 - Light and dark theme.
 
-![First pages sliding in while a folder is read](docs/fetching.png)
+![First-page previews during folder loading](docs/fetching.png)
 
 ## Quick start
 
@@ -72,7 +71,7 @@ app/
 
 | Part | Choice | Why |
 | --- | --- | --- |
-| Backend | Python, FastAPI | Best open-source PDF and OCR ecosystem; async downloads and a simple SSE stream. |
+| Backend | Python, FastAPI | Runs the PDF and OCR pipeline, downloads files asynchronously, and streams progress. |
 | PDF | pypdfium2 | Fast text extraction and page rendering in one permissively licensed package. |
 | OCR | Tesseract 5 | Free, self-hosted, supports French, English and Arabic. |
 | Frontend | Vanilla HTML, CSS, JS | One page, nothing to build. |
@@ -163,12 +162,6 @@ session that created them. Docker publishes the app on `127.0.0.1` for local use
 - OCR quality depends on the scan. Handwriting, low resolution and skew are hard; Arabic is
   weaker than French or English, and tables come out as plain lines.
 - Google Docs and Sheets are ignored; only PDF, PNG and JPEG are read.
-
-## Next steps
-
-- Store batches in SQLite or Redis and run extraction in a worker.
-- Support TIFF and WebP.
-- Add a second OCR engine (PaddleOCR or docTR) for difficult scans.
 
 ## Licence
 
