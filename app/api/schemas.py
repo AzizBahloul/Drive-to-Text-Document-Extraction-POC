@@ -15,7 +15,7 @@ class ExportFormat(StrEnum):
 
 
 class FolderRequest(BaseModel):
-    url: str = Field(min_length=1, max_length=2048, description="Public Drive folder link.")
+    url: str = Field(min_length=1, max_length=2048, description="Google Drive folder link.")
 
 
 class FileOut(BaseModel):
@@ -55,6 +55,8 @@ class BatchCreated(BaseModel):
 
 
 class CapabilitiesResponse(BaseModel):
+    private_drive_available: bool = False
+    private_drive_mode: str | None = None
     drive_mode: str
     ocr_available: bool
     ocr_languages: list[str]

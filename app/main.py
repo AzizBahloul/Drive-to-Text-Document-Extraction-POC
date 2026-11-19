@@ -3,8 +3,6 @@
 from __future__ import annotations
 
 import logging
-import shutil
-import tempfile
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -17,6 +15,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from app import __version__
+from app.api import drive_session
 from app.api.routes import ThumbnailCache, drive_error_response, router
 from app.batch.manager import BatchManager
 from app.config import Settings, get_settings
@@ -51,12 +50,9 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
 
     @asynccontextmanager
     async def lifespan(app: FastAPI):
-        # Clean up any leftover temp folders from previously aborted sessions
-        for stale in Path(tempfile.gettempdir()).glob("drive-to-text-*"):
-            if stale.is_dir():
-                shutil.rmtree(stale, ignore_errors=True)
-
         http = httpx.AsyncClient(timeout=httpx.Timeout(60, connect=15), follow_redirects=True)
+        app.state.http = http
+        app.state.drive_sessions = {}
         app.state.drive = drive or DriveClient(http, settings.google_api_key)
         app.state.batches = BatchManager(app.state.drive, settings)
         app.state.listings = {}
@@ -73,8 +69,6 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
 
     # One API reference page, served from app/static/docs.html (below) rather than FastAPI's
     # built-in one: that page pins Swagger UI by hash, sets a language and passes contrast.
-    # ReDoc and the OAuth2 redirect helper are off: there is no OAuth, and the CSP would
-    # leave both blank.
     app = FastAPI(
         title="Drive-to-Text",
         version=__version__,
@@ -83,9 +77,12 @@ def create_app(settings: Settings | None = None, drive: DriveClient | None = Non
         redoc_url=None,
         swagger_ui_oauth2_redirect_url=None,
     )
+    app.state.settings = settings
+    app.dependency_overrides[get_settings] = lambda: settings
     app.include_router(router)
+    app.include_router(drive_session.router)
     hosts = settings.allowed_host_list
-    app.add_middleware(SecurityHeadersMiddleware, allowed_hosts=hosts)
+    app.add_middleware(SecurityHeadersMiddleware)
     # Without a Host allowlist a DNS-rebinding page could drive the local API.
     if hosts and "*" not in hosts:
         app.add_middleware(TrustedHostMiddleware, allowed_hosts=hosts)

@@ -26,7 +26,9 @@ class TreeDrive(DriveClient):
         self.tree = tree
         self.reads: list[str] = []
 
-    async def list_folder(self, folder_id: str, resource_key: str | None = None) -> FolderListing:
+    async def list_folder(
+        self, folder_id: str, resource_key: str | None = None, known_name=None
+    ) -> FolderListing:
         self.reads.append(folder_id)
         if folder_id.startswith("locked"):
             raise DriveError("not_found", "This folder does not exist or is not shared publicly.")
@@ -222,7 +224,7 @@ def test_thumbnails_of_found_documents_are_allowed_before_the_scan_ends() -> Non
     seen: list[bool] = []
 
     class WatchingDrive(TreeDrive):
-        async def list_folder(self, folder_id, resource_key=None):
+        async def list_folder(self, folder_id, resource_key=None, known_name=None):
             if folder_id == "french":  # by now the English documents have been announced
                 listing, _ = app.state.listings[ROOT]
                 seen.append(any(f.id == "cv-en" for f in listing.files))

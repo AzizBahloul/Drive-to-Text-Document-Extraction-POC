@@ -4,9 +4,8 @@ from __future__ import annotations
 
 import time
 from collections import defaultdict
-from urllib.parse import urlparse
 
-from starlette.datastructures import MutableHeaders
+from starlette.datastructures import URL, MutableHeaders
 from starlette.responses import JSONResponse
 from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
@@ -35,6 +34,21 @@ DOCS_CONTENT_SECURITY_POLICY = "; ".join(
         "style-src 'self' https://cdn.jsdelivr.net",
         "img-src 'self' data:",
         "connect-src 'self'",
+        "object-src 'none'",
+        "base-uri 'none'",
+        "form-action 'self'",
+        "frame-ancestors 'none'",
+    ]
+)
+# Only the dedicated connection page needs Google's sign-in and file picker libraries.
+CONNECT_CONTENT_SECURITY_POLICY = "; ".join(
+    [
+        "default-src 'self'",
+        "script-src 'self' https://accounts.google.com https://apis.google.com",
+        "style-src 'self' 'unsafe-inline' https://accounts.google.com",
+        "frame-src https://accounts.google.com https://docs.google.com https://drive.google.com https://*.googleusercontent.com",
+        "connect-src 'self' https://accounts.google.com https://*.googleapis.com https://apis.google.com",
+        "img-src 'self' data: https://*.gstatic.com https://*.googleusercontent.com",
         "object-src 'none'",
         "base-uri 'none'",
         "form-action 'self'",
@@ -76,9 +90,8 @@ class RateLimiter:
 class SecurityHeadersMiddleware:
     """Pure ASGI middleware providing security headers, CSRF origin checks, and rate limiting."""
 
-    def __init__(self, app: ASGIApp, allowed_hosts: list[str] | None = None) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self.app = app
-        self.allowed_hosts = [h.lower() for h in (allowed_hosts or [])]
         self.limiter = RateLimiter(max_requests=120, window_seconds=60.0)
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -95,19 +108,8 @@ class SecurityHeadersMiddleware:
             origin = headers_dict.get(b"origin")
             if origin:
                 origin_str = origin.decode("latin1", errors="replace")
-                parsed = urlparse(origin_str)
-                origin_host = (parsed.hostname or "").lower()
-                host_header = (
-                    headers_dict.get(b"host", b"")
-                    .decode("latin1", errors="replace")
-                    .split(":")[0]
-                    .lower()
-                )
-                if (
-                    "*" not in self.allowed_hosts
-                    and origin_host != host_header
-                    and origin_host not in self.allowed_hosts
-                ):
+                url = URL(scope=scope)
+                if origin_str != f"{url.scheme}://{url.netloc}":
                     response = JSONResponse(
                         {"detail": "Cross-origin request forbidden."}, status_code=403
                     )
@@ -127,12 +129,26 @@ class SecurityHeadersMiddleware:
 
         policy = DOCS_CONTENT_SECURITY_POLICY if path == _DOCS_PATH else CONTENT_SECURITY_POLICY
 
+        connect_page = path == "/static/connect.html"
+        if connect_page:
+            policy = CONNECT_CONTENT_SECURITY_POLICY
+        private_api = path.startswith("/api/") and (
+            path.startswith("/api/drive/")
+            or b"drive_session=" in dict(scope["headers"]).get(b"cookie", b"")
+        )
+
         async def send_with_headers(message: Message) -> None:
             if message["type"] == "http.response.start":
                 headers = MutableHeaders(scope=message)
                 headers.setdefault("X-Content-Type-Options", "nosniff")
-                headers.setdefault("Referrer-Policy", "no-referrer")
+                headers.setdefault(
+                    "Referrer-Policy", "strict-origin" if connect_page else "no-referrer"
+                )
+                if private_api or path == "/api/capabilities":
+                    headers["Cache-Control"] = "no-store"
                 headers.setdefault("X-Frame-Options", "DENY")
+                if connect_page:
+                    headers.setdefault("Cross-Origin-Opener-Policy", "same-origin-allow-popups")
                 headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
                 headers.setdefault("Content-Security-Policy", policy)
                 # Only set HSTS when running over TLS; ignore for plain HTTP (localhost).

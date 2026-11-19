@@ -55,7 +55,12 @@ class BatchManager:
         self._drive = drive
         self._settings = settings
         self._batches: dict[str, Batch] = {}
-        self._semaphore = asyncio.Semaphore(settings.max_parallel_files)
+        self._downloads = asyncio.Semaphore(settings.max_parallel_downloads)
+        self._extractions = asyncio.Semaphore(settings.max_parallel_files)
+        # Bound the temporary files waiting for a free extraction worker.
+        self._in_flight = asyncio.Semaphore(
+            settings.max_parallel_files + settings.max_parallel_downloads
+        )
 
     # ----- lifecycle -------------------------------------------------------
 
@@ -68,6 +73,8 @@ class BatchManager:
         files: list[DriveFile],
         ocr_language: str | None,
         resource_key: str | None = None,
+        drive: DriveClient | None = None,
+        owner: str | None = None,
     ) -> Batch:
         running = sum(1 for batch in self._batches.values() if batch.finished_at is None)
         if running >= self._settings.max_running_batches:
@@ -81,10 +88,13 @@ class BatchManager:
             folder_url=folder_url,
             folder_name=folder_name,
             ocr_language=ocr_language,
+            owner=owner,
             jobs={file.id: FileJob(file=file) for file in files},
         )
         self._batches[batch.id] = batch
-        batch.task = asyncio.create_task(self._run(batch, resource_key), name=f"batch-{batch.id}")
+        batch.task = asyncio.create_task(
+            self._run(batch, resource_key, drive or self._drive), name=f"batch-{batch.id}"
+        )
         return batch
 
     def _prune(self) -> None:
@@ -99,6 +109,14 @@ class BatchManager:
             return self._batches[batch_id]
         except KeyError as exc:
             raise BatchNotFoundError(batch_id) from exc
+
+    def discard_private_batches(self, owner: str) -> None:
+        """Stop a disconnected browser's active work and drop its retained results."""
+        for batch_id, batch in list(self._batches.items()):
+            if batch.owner == owner:
+                if batch.finished_at is None:
+                    self.cancel(batch_id)
+                del self._batches[batch_id]
 
     def cancel(self, batch_id: str) -> Batch:
         """Cancel an in-flight batch and mark unfinished jobs as cancelled."""
@@ -118,10 +136,10 @@ class BatchManager:
         log.info("Batch %s cancelled by user", batch.id)
         return batch
 
-    async def _run(self, batch: Batch, resource_key: str | None) -> None:
+    async def _run(self, batch: Batch, resource_key: str | None, drive: DriveClient) -> None:
         try:
             await asyncio.gather(
-                *(self._process(batch, job, resource_key) for job in batch.jobs.values()),
+                *(self._process(batch, job, resource_key, drive) for job in batch.jobs.values()),
                 return_exceptions=True,
             )
         except asyncio.CancelledError:
@@ -132,13 +150,15 @@ class BatchManager:
             self._publish(batch, {"type": "batch", **batch.to_dict(include_text=False)})
             log.info("Batch %s finished: %s", batch.id, batch.counts())
 
-    async def _process(self, batch: Batch, job: FileJob, resource_key: str | None) -> None:
-        async with self._semaphore:
+    async def _process(
+        self, batch: Batch, job: FileJob, resource_key: str | None, drive: DriveClient
+    ) -> None:
+        async with self._in_flight:
             job.status = FileStatus.PROCESSING
             job.started_at = datetime.now(UTC)
             self._publish(batch, {"type": "file", "file": job.to_dict(include_text=False)})
             try:
-                job.result = await self._download_and_extract(batch, job, resource_key)
+                job.result = await self._download_and_extract(batch, job, resource_key, drive)
                 job.status = FileStatus.DONE
             except DriveError as exc:
                 job.status = FileStatus.FAILED
@@ -154,7 +174,7 @@ class BatchManager:
                 self._publish(batch, {"type": "file", "file": job.to_dict(include_text=True)})
 
     async def _download_and_extract(
-        self, batch: Batch, job: FileJob, resource_key: str | None
+        self, batch: Batch, job: FileJob, resource_key: str | None, drive: DriveClient
     ) -> ExtractionResult:
         raw_suffix = Path(job.file.name).suffix.lower()
         suffix = (
@@ -164,35 +184,44 @@ class BatchManager:
         )
         with tempfile.TemporaryDirectory(prefix="drive-to-text-") as workdir:
             target = Path(workdir) / f"{job.file.id}{suffix}"
-            job.downloaded_bytes = await self._drive.download(
-                job.file,
-                target,
-                max_bytes=self._settings.max_file_size_bytes,
-                resource_key=resource_key,
-            )
-            # Show the real first page while it is being read; the page swaps it in live.
-            job.preview = await asyncio.to_thread(make_preview, target, job.file.kind)
-            self._publish(batch, {"type": "file", "file": job.to_dict(include_text=False)})
-            options = ExtractionOptions(
-                ocr_language=batch.ocr_language,
-                render_dpi=self._settings.ocr_render_dpi,
-                min_chars_per_page=self._settings.pdf_text_min_chars_per_page,
-                ocr_timeout_s=self._settings.ocr_timeout_seconds,
-                ocr_workers=self._settings.effective_ocr_page_workers,
-                max_pages=self._settings.max_pdf_pages,
-                time_limit_s=self._settings.file_time_limit_seconds,
-            )
-            previewer = (
-                PagePreviewer(target, PAGE_PREVIEW_WIDTH)
-                if job.file.kind is FileKind.PDF
-                else contextlib.nullcontext(None)
-            )
-            # Extraction is CPU-bound (PDF rendering, Tesseract); keep the event loop free.
-            with previewer as pages:
-                reporter = PageReporter(self, batch, job, pages, asyncio.get_running_loop())
-                return await asyncio.to_thread(
-                    extract_file, target, job.file.kind, options, reporter
+            async with self._downloads:
+                job.downloaded_bytes = await drive.download(
+                    job.file,
+                    target,
+                    max_bytes=self._settings.max_file_size_bytes,
+                    resource_key=resource_key,
                 )
+            async with self._extractions:
+                work = asyncio.create_task(self._extract(batch, job, target))
+                try:
+                    return await asyncio.shield(work)
+                except asyncio.CancelledError:
+                    # The native worker still owns its file and its CPU slot until it exits.
+                    await asyncio.gather(work, return_exceptions=True)
+                    raise
+
+    async def _extract(self, batch: Batch, job: FileJob, target: Path) -> ExtractionResult:
+        # Show the real first page while it is being read; the page swaps it in live.
+        job.preview = await asyncio.to_thread(make_preview, target, job.file.kind)
+        self._publish(batch, {"type": "file", "file": job.to_dict(include_text=False)})
+        options = ExtractionOptions(
+            ocr_language=batch.ocr_language,
+            render_dpi=self._settings.ocr_render_dpi,
+            min_chars_per_page=self._settings.pdf_text_min_chars_per_page,
+            ocr_timeout_s=self._settings.ocr_timeout_seconds,
+            ocr_workers=self._settings.effective_ocr_page_workers,
+            max_pages=self._settings.max_pdf_pages,
+            time_limit_s=self._settings.file_time_limit_seconds,
+        )
+        previewer = (
+            PagePreviewer(target, PAGE_PREVIEW_WIDTH)
+            if job.file.kind is FileKind.PDF
+            else contextlib.nullcontext(None)
+        )
+        # Extraction is CPU-bound (PDF rendering, Tesseract); keep the event loop free.
+        with previewer as pages:
+            reporter = PageReporter(self, batch, job, pages, asyncio.get_running_loop())
+            return await asyncio.to_thread(extract_file, target, job.file.kind, options, reporter)
 
     def _page_reached(self, batch: Batch, job: FileJob, page: dict, image: bytes | None) -> None:
         """On the event loop: remember the page and its frame, and tell the subscribers."""

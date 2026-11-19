@@ -1,7 +1,7 @@
 # Drive to Text
 
-Paste a public Google Drive folder link, pick the PDFs and images you want, and get their text
-back. Native PDFs are read from their text layer; images and scanned PDF pages go through OCR.
+Paste a Google Drive folder link or choose private files, then extract text from the PDFs and
+images. The app uses the text layer of native PDFs and runs OCR on images and scanned pages.
 
 Built for the DI Xpertia technical assessment TA-2026-01.
 
@@ -10,8 +10,7 @@ Built for the DI Xpertia technical assessment TA-2026-01.
 ## Features
 
 - Accepts every public folder link shape (`/drive/folders/<id>`, `/drive/u/0/folders/<id>`,
-  `/open?id=<id>`, with or without `?usp=sharing`), and gives a clear error for private or
-  invalid links.
+  `/open?id=<id>`, with or without `?usp=sharing`), and supports private folders after Google authorization.
 - Lists the PDF, PNG and JPEG files in the folder and its subfolders.
 - Processes the selected files in parallel, with live per-file progress. One failing file
   never stops the others.
@@ -54,7 +53,7 @@ The API reference is at `/api/docs`.
 drive link -> list files -> select -> batch
    |- PDF          -> text layer, page by page
    |     page with text    -> kept as is                       (pdf-parser)
-   |     page without text -> rendered at 200 dpi -> Tesseract (ocr)
+   |     page without text -> rendered at 300 dpi -> deskewed if needed -> Tesseract (ocr)
    `- PNG / JPEG   -> Tesseract                                (ocr)
 results -> text per file, live status, JSON export
 ```
@@ -83,8 +82,28 @@ app/
 
 - **No key (default):** reads the public folder page. Works out of the box, but sizes are not
   shown and very large folders are cut at 50 entries.
-- **With an API key (recommended):** set `GOOGLE_API_KEY` in `.env` (Google Cloud Console,
-  Drive API enabled). Listing is exact and complete. No login is needed for public folders.
+- **Public Drive API:** Enable the Google Drive API in Google Cloud and set `GOOGLE_API_KEY` in
+  `.env`. This enables paginated listing, file sizes and direct downloads. Folder scanning still
+  follows the configured depth and folder limits.
+- **Private folders:** Create a Google OAuth **Web application** client in a project with the
+  Google Drive API enabled. Add the exact app origin, such as `http://127.0.0.1:8000`, to its
+  authorized JavaScript origins. Set `GOOGLE_OAUTH_CLIENT_ID` and restart the app. If your consent
+  screen is in testing mode, add the account as a test user. Choose **Connect private Drive**,
+  then **Connect a private folder** and paste the folder link. Google requests the restricted
+  `drive.readonly` scope so the app can list descendants of that folder.
+- **Selected private files:** Enable the Google Picker API in the same project. Set
+  `GOOGLE_PROJECT_NUMBER` to the numeric project number and `GOOGLE_PICKER_KEY` to a browser key.
+  Restrict that key to the Drive and Picker APIs and allow referrers from the app origin and
+  `https://docs.google.com/*`. Choose **Choose private files** for the narrower `drive.file`
+  scope. Private previews appear after the app downloads the files.
+
+The private Drive connection expires within one hour or when you choose **Disconnect Drive**.
+Disconnecting clears your private batches from the server. Save any needed exports first. Folder and Picker authorization use short-lived
+access tokens kept in server memory for the current browser session.
+
+[Google OAuth setup](https://developers.google.com/identity/gsi/web/guides/get-google-api-clientid)
+· [Google Picker setup](https://developers.google.com/workspace/drive/picker/guides/web-picker-sample)
+· [Drive scopes](https://developers.google.com/workspace/drive/api/guides/api-specific-auth)
 
 ## Configuration
 
@@ -94,7 +113,9 @@ Everything is optional. Copy `.env.example` to `.env` to change it. The most use
 | --- | --- | --- |
 | `GOOGLE_API_KEY` | none | Use the Drive API instead of the public page |
 | `MAX_FILE_SIZE_MB` | 25 | Larger files are refused |
-| `MAX_PARALLEL_FILES` | 2 | Files processed at the same time |
+| `MAX_PARALLEL_DOWNLOADS` | 4 | Simultaneous Drive downloads |
+| `MAX_PARALLEL_FILES` | 2 | Simultaneous file extractions |
+| `OCR_RENDER_DPI` | 300 | Scan render resolution, within the pixel limit |
 | `OCR_DEFAULT_LANGUAGE` | eng | Preselected OCR language |
 | `SUBFOLDER_DEPTH` | 3 | How deep subfolders are listed |
 | `TESSDATA_DIR` | none | Folder with extra language packs, if not installed system-wide |
@@ -131,8 +152,8 @@ fly, so no binary fixtures are stored.
 Files come from folders the user does not control, so they are treated as untrusted: oversized
 pages are rendered at a reduced scale, OCR and each file have time limits, and the number of
 running batches is capped. The server only answers to allowed hosts, sends strict security
-headers, and the API key is never put in a URL. The API has no authentication, so Docker
-publishes it on `127.0.0.1` only.
+headers, and sends the server API key in a request header. Private results require the browser
+session that created them. Docker publishes the app on `127.0.0.1` for local use.
 
 ## Limits
 

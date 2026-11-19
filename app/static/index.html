@@ -15,20 +15,6 @@
 </head>
 <body>
 
-
-<div class="splash" id="splash" aria-hidden="true">
-  <svg class="splash-mark" viewBox="0 0 64 64" width="72" height="72" aria-hidden="true">
-    <rect class="splash-sheet" x="10" y="6" width="44" height="52" rx="4"/>
-    <path class="splash-fold" d="M40 6v14h14"/>
-    <rect class="splash-highlight" x="18" y="29" width="22" height="7"/>
-    <path class="splash-line" d="M18 24h16"/>
-    <path class="splash-line" d="M18 32.5h22"/>
-    <path class="splash-line" d="M18 41h20"/>
-    <path class="splash-line" d="M18 49h12"/>
-  </svg>
-  <p class="splash-word">Drive to Text</p>
-</div>
-
 <header class="topbar">
   <a class="brand" href="/" aria-label="Drive to Text, start over">
     <svg class="brand-mark" viewBox="0 0 64 64" width="26" height="26" aria-hidden="true">
@@ -67,10 +53,10 @@
       <div class="stage-inner">
         <p class="stage-step">Step 1</p>
         <h1 class="hero-title">Read every document in a shared Drive folder.</h1>
-        <p class="hero-lede">Paste a public folder link. The PDFs and images inside are listed; the ones you pick are extracted, text layer first and OCR when there is none.</p>
+        <p class="hero-lede" id="intro">Paste a public folder link. The PDFs and images inside are listed; the ones you pick are extracted, text layer first and OCR when there is none.</p>
 
         <form class="link-form" id="linkForm" novalidate>
-          <label class="link-label" for="linkInput">Public Google Drive folder link</label>
+          <label class="link-label" id="linkLabel" for="linkInput">Public Google Drive folder link</label>
           <div class="link-field" id="linkField">
             <input class="link-input" id="linkInput" type="url" inputmode="url" autocomplete="off" spellcheck="false"
                    placeholder="https://drive.google.com/drive/folders/…" aria-describedby="linkHint" required>
@@ -81,6 +67,8 @@
           </div>
           <p class="field-error" id="linkError" role="alert" hidden></p>
           <p class="field-hint" id="linkHint">The folder must be shared as "Anyone with the link". Documents in its subfolders are listed too.</p>
+          <a class="stage-link" href="/static/connect.html" id="connectDrive" hidden>Connect private Drive</a>
+          <button class="button button-ghost button-small" id="disconnectDrive" type="button" hidden>Disconnect Drive</button>
           <div class="fetching" id="fetching" hidden>
             <div class="fetch-reel" id="fetchReel" aria-hidden="true"></div>
             <div class="fetch-info">
@@ -156,11 +144,7 @@
         <div class="progress" role="progressbar" id="progress" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" aria-label="Batch progress">
           <div class="progress-fill" id="progressFill"></div>
         </div>
-        <div class="job-fold" id="jobFold">
-          <div class="job-fold-inner">
-            <ul class="job-list" id="jobList" aria-label="Files in this batch"></ul>
-          </div>
-        </div>
+        <ul class="job-list" id="jobList" aria-label="Files in this batch"></ul>
       </div>
     </section>
 
@@ -192,7 +176,7 @@
 </main>
 
 <footer class="foot">
-  <p>Runs locally. PDF text through pypdfium2, OCR through Tesseract. Nothing is stored after the page is closed.</p>
+  <p>Runs locally. PDF text through pypdfium2, OCR through Tesseract. Batches are held in server memory.</p>
 </footer>
 
 <template id="tpl-file">

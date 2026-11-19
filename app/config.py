@@ -11,10 +11,14 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
 
     google_api_key: str | None = Field(default=None, description="Drive API key; optional.")
+    google_oauth_client_id: str | None = None
+    google_picker_key: str | None = None
+    google_project_number: str | None = None
+    max_parallel_downloads: int = Field(default=4, ge=1, le=16)
     max_file_size_mb: int = Field(default=25, ge=1, le=500)
     max_parallel_files: int = Field(default=2, ge=1, le=16)
     ocr_default_language: str = Field(default="eng")
-    ocr_render_dpi: int = Field(default=200, ge=72, le=600)
+    ocr_render_dpi: int = Field(default=300, ge=72, le=600)
     pdf_text_min_chars_per_page: int = Field(default=25, ge=1)
     tesseract_cmd: str = Field(default="tesseract")
     tessdata_dir: str | None = Field(

@@ -30,10 +30,9 @@
   --font-read: "Newsreader", "Iowan Old Style", "Palatino Linotype", Georgia, "Noto Naskh Arabic", serif;
   --ease-out: cubic-bezier(0.2, 0.7, 0.2, 1);
   --ease-spring: cubic-bezier(0.34, 1.4, 0.64, 1);
-  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
-  --t-fast: 160ms;
-  --t-base: 280ms;
-  --t-slow: 520ms;
+  --t-fast: 110ms;
+  --t-base: 150ms;
+  --t-slow: 190ms;
   color-scheme: light;
 }
 
@@ -92,8 +91,6 @@
 *::before,
 *::after { box-sizing: border-box; }
 
-html { scroll-behavior: smooth; }
-
 body {
   margin: 0;
   min-height: 100vh;
@@ -121,37 +118,7 @@ a:hover { color: var(--blue-deep); }
 
 /* Theme change: a short cross-fade where View Transitions exist (theme.js). */
 ::view-transition-old(root),
-::view-transition-new(root) { animation-duration: 320ms; animation-timing-function: var(--ease-out); }
-
-/* ---------------------------------------------------------------- splash */
-
-.splash {
-  position: fixed;
-  inset: 0;
-  z-index: 50;
-  display: grid;
-  place-content: center;
-  justify-items: center;
-  gap: 18px;
-  background: var(--paper);
-  transition: opacity var(--t-slow) var(--ease-out), transform var(--t-slow) var(--ease-out), visibility 0s linear var(--t-slow);
-}
-.splash.is-leaving { opacity: 0; transform: translateY(-24px); visibility: hidden; }
-
-.splash-mark { overflow: visible; }
-.splash-sheet { fill: var(--sheet); stroke: var(--ink); stroke-width: 4; stroke-dasharray: 200; stroke-dashoffset: 200; animation: draw 700ms var(--ease-out) forwards; }
-.splash-fold { fill: var(--paper-deep); stroke: var(--ink); stroke-width: 4; stroke-linejoin: round; opacity: 0; animation: appear 300ms 500ms forwards; }
-.splash-line { stroke: var(--ink); stroke-width: 3.5; stroke-linecap: round; stroke-dasharray: 30; stroke-dashoffset: 30; animation: draw 360ms var(--ease-out) forwards; }
-.splash-line:nth-of-type(1) { animation-delay: 560ms; }
-.splash-line:nth-of-type(2) { animation-delay: 680ms; }
-.splash-line:nth-of-type(3) { animation-delay: 800ms; }
-.splash-line:nth-of-type(4) { animation-delay: 920ms; }
-.splash-highlight { fill: var(--mark); transform-origin: 18px 32px; transform: scaleX(0); animation: sweep 320ms 1040ms var(--ease-out) forwards; }
-.splash-word { margin: 0; font-weight: 500; letter-spacing: -0.01em; color: var(--ink-2); opacity: 0; animation: rise 400ms 300ms var(--ease-out) forwards; }
-
-@keyframes draw { to { stroke-dashoffset: 0; } }
-@keyframes appear { to { opacity: 1; } }
-@keyframes sweep { to { transform: scaleX(1); } }
+::view-transition-new(root) { animation-duration: var(--t-slow); animation-timing-function: var(--ease-out); }
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 
 /* ---------------------------------------------------------------- topbar */
@@ -242,9 +209,11 @@ a:hover { color: var(--blue-deep); }
 }
 .spine-fill {
   width: 100%;
-  height: 0%;
+  height: 100%;
   background: var(--blue);
-  transition: height 700ms var(--ease-out);
+  transform: scaleY(0);
+  transform-origin: top;
+  transition: transform var(--t-slow) var(--ease-out);
 }
 .spine-nodes {
   list-style: none;
@@ -288,7 +257,7 @@ a:hover { color: var(--blue-deep); }
   border: solid var(--on-blue);
   border-width: 0 2.5px 2.5px 0;
   transform: rotate(45deg);
-  animation: check-in 380ms var(--ease-spring) both;
+  animation: check-in var(--t-slow) var(--ease-spring) both;
 }
 .spine-node.is-current span::before {
   content: "";
@@ -296,7 +265,7 @@ a:hover { color: var(--blue-deep); }
   inset: -2px;
   border-radius: 50%;
   border: 2px solid var(--blue);
-  animation: ring-out 900ms var(--ease-out) both;
+  animation: ring-out var(--t-slow) var(--ease-out) both;
   pointer-events: none;
 }
 @keyframes check-in { from { opacity: 0; transform: rotate(45deg) scale(0.3); } }
@@ -304,25 +273,9 @@ a:hover { color: var(--blue-deep); }
 
 .stages { min-width: 0; }
 
-.stage {
-  display: grid;
-  grid-template-rows: 0fr;
-  opacity: 0;
-  transform: translateY(14px);
-  transition: grid-template-rows var(--t-slow) var(--ease-out), opacity var(--t-slow) var(--ease-out), transform var(--t-slow) var(--ease-out);
-}
-.stage.is-open { grid-template-rows: 1fr; opacity: 1; transform: none; }
-.stage-inner { min-height: 0; overflow: hidden; padding: 12px 0 44px; }
-.stage.is-open .stage-inner { overflow: visible; }
-
-/* Opening a stage is one orchestrated moment: the label, the heading, the intro and the
-   content arrive in reading order. */
-.stage.is-open .stage-inner > * { animation: stage-rise 560ms var(--ease-out) both; }
-.stage.is-open .stage-inner > :nth-child(2) { animation-delay: 90ms; }
-.stage.is-open .stage-inner > :nth-child(3) { animation-delay: 170ms; }
-.stage.is-open .stage-inner > :nth-child(n + 4) { animation-delay: 250ms; }
-@keyframes stage-rise { from { opacity: 0; transform: translate3d(0, 12px, 0); } }
-
+.stage-inner { padding: 12px 0 44px; }
+.stage.is-open .stage-inner { animation: stage-rise var(--t-base) var(--ease-out) backwards; }
+@keyframes stage-rise { from { opacity: 0; transform: translateY(6px); } }
 
 .stage-step {
   margin: 0 0 8px;
@@ -431,7 +384,7 @@ a:hover { color: var(--blue-deep); }
   background: currentColor;
   transform-origin: left center;
   transform: scaleX(0);
-  animation: read 1.6s var(--ease-out) infinite;
+  animation: read 900ms var(--ease-out) infinite;
 }
 @keyframes read {
   0% { transform: translateY(0) scaleX(0); }
@@ -458,8 +411,8 @@ a:hover { color: var(--blue-deep); }
   transition: border-color var(--t-fast), box-shadow var(--t-fast);
 }
 .link-field:focus-within { border-color: var(--blue); box-shadow: 0 0 0 4px var(--blue-soft), var(--shadow); }
-.link-field.is-error { border-color: var(--bad); animation: nudge 360ms var(--ease-out); }
-.link-field.is-busy { background: linear-gradient(100deg, var(--sheet) 40%, var(--blue-soft) 50%, var(--sheet) 60%) 0 0 / 250% 100%; animation: shimmer 1.4s linear infinite; }
+.link-field.is-error { border-color: var(--bad); animation: nudge var(--t-slow) var(--ease-out); }
+.link-field.is-busy { background: var(--paper-deep); }
 .link-input {
   flex: 1;
   min-width: 0;
@@ -478,9 +431,8 @@ a:hover { color: var(--blue-deep); }
 .field-error { margin: 10px 0 0; color: var(--bad); font-weight: 500; }
 .field-hint { margin: 10px 0 0; color: var(--ink-3); font-size: 14px; }
 
-/* Fetching: while the folder is read, a blank page is scanned; once the listing is back the
-   real first pages slide in one by one, in the order Drive returns their thumbnails.
-   It waits 250ms before showing, so a fast listing never flashes it. */
+/* While Drive lists the folder, show a blank page followed by thumbnails as they arrive.
+   Delay the card's entrance so a fast listing never flashes it. */
 .fetching {
   display: flex;
   align-items: center;
@@ -491,7 +443,7 @@ a:hover { color: var(--blue-deep); }
   border: 1px solid var(--rule);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  animation: rise var(--t-base) 250ms var(--ease-out) both;
+  animation: rise var(--t-fast) 120ms var(--ease-out) both;
 }
 .fetch-reel {
   position: relative;
@@ -518,7 +470,7 @@ a:hover { color: var(--blue-deep); }
   box-shadow: var(--shadow);
   opacity: 0.55;
   transform: translateX(calc(var(--o) * 132px)) scale(0.84);
-  transition: transform 520ms var(--ease-out), opacity 520ms var(--ease-out), border-color var(--t-base);
+  transition: transform var(--t-base) var(--ease-out), opacity var(--t-base) var(--ease-out), border-color var(--t-fast);
 }
 .fetch-slide.is-current { opacity: 1; transform: translateX(0) scale(1); border-color: var(--blue); }
 .fetch-slide.is-incoming,
@@ -533,9 +485,8 @@ a:hover { color: var(--blue-deep); }
   background: var(--sheet);
 }
 .fetch-beam { z-index: 1; }
-/* One sweep as each page lands; while the scan is still going, the page in front keeps sweeping. */
-.fetch-slide.is-current .fetch-beam { animation: page-beam 900ms var(--ease-in-out) 120ms both; }
-.fetch-reel.is-scanning .fetch-slide.is-current .fetch-beam { animation: page-beam 1.4s linear 600ms infinite; }
+/* The page in front keeps sweeping while Drive is still listing. */
+.fetch-reel.is-scanning .fetch-slide.is-current .fetch-beam { animation: page-beam 900ms linear var(--t-base) infinite; }
 .fetch-reel.is-scanning .fetch-slide.is-blank .fetch-beam { animation-delay: 0s; }
 .fetch-info { flex: 1; min-width: 0; }
 .fetch-text { margin: 0; color: var(--ink-2); font-weight: 500; }
@@ -555,7 +506,6 @@ a:hover { color: var(--blue-deep); }
   45% { transform: translateX(5px); }
   70% { transform: translateX(-3px); }
 }
-@keyframes shimmer { to { background-position: -150% 0; } }
 
 /* ---------------------------------------------------------------- checkboxes */
 
@@ -666,7 +616,7 @@ a:hover { color: var(--blue-deep); }
 }
 .selection-count { margin: 0; color: var(--ink-2); font-size: 15px; }
 .selection-count strong { display: inline-block; color: var(--ink); font-weight: 700; min-width: 1.2ch; text-align: right; }
-.selection-count strong.is-ticking { animation: tick 320ms var(--ease-spring); }
+.selection-count strong.is-ticking { animation: tick var(--t-base) var(--ease-spring); }
 @keyframes tick { 40% { transform: scale(1.3); color: var(--blue); } }
 
 .file-list {
@@ -687,8 +637,8 @@ a:hover { color: var(--blue-deep); }
   padding: 12px 14px;
   border-top: 1px solid var(--rule);
   opacity: 0;
-  animation: rise var(--t-base) var(--ease-out) forwards;
-  animation-delay: calc(var(--i, 0) * 40ms);
+  animation: rise var(--t-fast) var(--ease-out) forwards;
+  animation-delay: min(40ms, calc(var(--i, 0) * 10ms));
   transition: background var(--t-fast);
 }
 .file-row:first-child { border-top: 0; }
@@ -754,10 +704,11 @@ a:hover { color: var(--blue-deep); }
 }
 .progress-fill {
   height: 100%;
-  width: 0%;
   background: var(--blue);
   border-radius: 3px;
-  transition: width var(--t-slow) var(--ease-out), background var(--t-base);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform var(--t-base) var(--ease-out), background var(--t-fast);
 }
 .progress.is-finished .progress-fill { background: var(--ok); }
 .progress.has-failures .progress-fill { background: linear-gradient(90deg, var(--ok), var(--ok) 85%, var(--bad)); }
@@ -815,7 +766,7 @@ a:hover { color: var(--blue-deep); }
   font-size: 15px;
   color: var(--ink-2);
 }
-.job-snippet.is-revealing { animation: snippet-wipe 700ms var(--ease-out) both; }
+.job-snippet.is-revealing { animation: snippet-wipe var(--t-slow) var(--ease-out) both; }
 @keyframes snippet-wipe {
   from { opacity: 0.4; clip-path: inset(0 100% 0 0); }
   to { opacity: 1; clip-path: inset(0 0 0 0); }
@@ -869,14 +820,14 @@ a:hover { color: var(--blue-deep); }
   pointer-events: none;
 }
 .job-row[data-status="processing"] .job-page { border-color: var(--blue); }
-.job-row[data-status="processing"] .job-page i { background: var(--blue); animation: page-write 1.6s var(--ease-out) infinite; }
-.job-row[data-status="processing"] .job-page i:nth-child(2) { animation-delay: 0.12s; }
-.job-row[data-status="processing"] .job-page i:nth-child(3) { animation-delay: 0.24s; }
-.job-row[data-status="processing"] .job-page i:nth-child(4) { animation-delay: 0.36s; }
-.job-row[data-status="processing"] .job-page i:nth-child(5) { animation-delay: 0.48s; }
+.job-row[data-status="processing"] .job-page i { background: var(--blue); animation: page-write 950ms var(--ease-out) infinite; }
+.job-row[data-status="processing"] .job-page i:nth-child(2) { animation-delay: 70ms; }
+.job-row[data-status="processing"] .job-page i:nth-child(3) { animation-delay: 140ms; }
+.job-row[data-status="processing"] .job-page i:nth-child(4) { animation-delay: 210ms; }
+.job-row[data-status="processing"] .job-page i:nth-child(5) { animation-delay: 280ms; }
 .job-row[data-status="processing"] .job-page.has-image i { animation: none; }
-.job-row[data-phase="download"] .job-page.has-image > img { animation: page-fetch 0.9s ease-in-out infinite alternate; }
-.job-row[data-phase="read"] .job-beam { animation: page-beam 1.6s linear infinite; }
+.job-row[data-phase="download"] .job-page.has-image > img { animation: page-fetch 650ms ease-in-out infinite alternate; }
+.job-row[data-phase="read"] .job-beam { animation: page-beam 900ms linear infinite; }
 .job-row[data-status="done"] .job-page { border-color: var(--ok); animation: page-settle var(--t-base) var(--ease-out); }
 .job-row[data-status="done"] .job-page i { background: var(--ink-2); opacity: 0.75; }
 .job-row[data-status="failed"] .job-page { border-color: var(--bad); }
@@ -903,7 +854,7 @@ a:hover { color: var(--blue-deep); }
   display: grid;
   grid-template-rows: 0fr;
   opacity: 0;
-  transition: grid-template-rows var(--t-slow) var(--ease-in-out), opacity var(--t-base) var(--ease-out);
+  transition: grid-template-rows var(--t-slow) var(--ease-out), opacity var(--t-fast) var(--ease-out);
 }
 .job-row.is-live .job-live { grid-template-rows: 1fr; opacity: 1; }
 .job-live-inner {
@@ -932,11 +883,11 @@ a:hover { color: var(--blue-deep); }
   height: 100%;
   object-fit: contain;
   background: var(--sheet);
-  animation: page-lay 260ms var(--ease-out) both;
+  animation: page-lay var(--t-fast) var(--ease-out) both;
 }
 @keyframes page-lay { from { opacity: 0; transform: translateY(-7%) scale(0.97); } }
 .live-beam { z-index: 1; }
-.job-row.is-live[data-status="processing"] .live-beam { animation: page-beam 1.4s linear infinite; }
+.job-row.is-live[data-status="processing"] .live-beam { animation: page-beam 900ms linear infinite; }
 .job-row[data-status="done"] .live-page { border-color: var(--ok); }
 .job-row[data-status="failed"] .live-page { border-color: var(--bad); }
 .live-read { min-width: 0; }
@@ -982,19 +933,9 @@ a:hover { color: var(--blue-deep); }
   background: linear-gradient(var(--rule), var(--rule)) 0 0.45em / 94% 0.55em no-repeat,
     linear-gradient(var(--rule), var(--rule)) 0 1.95em / 80% 0.55em no-repeat,
     linear-gradient(var(--rule), var(--rule)) 0 3.45em / 58% 0.55em no-repeat;
-  animation: page-fetch 0.9s ease-in-out infinite alternate;
+  animation: page-fetch 650ms ease-in-out infinite alternate;
 }
-.live-text.is-new { animation: snippet-wipe 420ms var(--ease-out) both; }
-
-/* When the batch is finished the list folds away and the results take its place. */
-.job-fold {
-  display: grid;
-  grid-template-rows: 1fr;
-  transition: grid-template-rows var(--t-slow) var(--ease-in-out), opacity var(--t-base) var(--ease-out);
-}
-.job-fold-inner { min-height: 0; }
-.job-fold.is-folded { grid-template-rows: 0fr; opacity: 0; }
-.job-fold.is-folded .job-fold-inner { overflow: hidden; }
+.live-text.is-new { animation: snippet-wipe var(--t-fast) var(--ease-out) both; }
 
 /* Step 2: each file's real thumbnail, scanned in from the top as it arrives. */
 .file-thumb {
@@ -1007,7 +948,7 @@ a:hover { color: var(--blue-deep); }
   background: repeating-linear-gradient(to bottom, var(--rule) 0 1.5px, transparent 1.5px 5px) 5px 7px / calc(100% - 10px) calc(100% - 12px) no-repeat, var(--sheet);
   overflow: hidden;
 }
-.file-thumb.has-image img { animation: thumb-scan-in 560ms var(--ease-out) both; }
+.file-thumb.has-image img { animation: thumb-scan-in var(--t-base) var(--ease-out) both; }
 .file-thumb.has-image::after {
   content: "";
   position: absolute;
@@ -1017,7 +958,7 @@ a:hover { color: var(--blue-deep); }
   height: 2px;
   background: var(--blue);
   opacity: 0;
-  animation: thumb-beam 560ms var(--ease-out);
+  animation: thumb-beam var(--t-base) var(--ease-out);
 }
 @keyframes thumb-scan-in {
   from { clip-path: inset(0 0 100% 0); }
@@ -1061,11 +1002,8 @@ a:hover { color: var(--blue-deep); }
   border: 1px solid var(--rule);
   border-radius: 8px;
   box-shadow: var(--shadow);
-  opacity: 0;
-  transform: translateY(16px);
-  transition: opacity var(--t-slow) var(--ease-out), transform var(--t-slow) var(--ease-out), box-shadow var(--t-base);
+  transition: box-shadow var(--t-fast);
 }
-.sheet.is-visible { opacity: 1; transform: none; }
 .sheet.is-failed { border-color: color-mix(in srgb, var(--bad) 45%, var(--rule)); }
 .sheet.is-open { box-shadow: var(--shadow-lift); }
 .sheet:not(.is-open), .sheet-head { cursor: pointer; }
@@ -1167,11 +1105,9 @@ a:hover { color: var(--blue-deep); }
 /* ---------------------------------------------------------------- motion */
 
 @media (prefers-reduced-motion: reduce) {
-  html { scroll-behavior: auto; }
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
-  .splash { display: none; }
   ::view-transition-old(root), ::view-transition-new(root) { animation: none; }
-  .file-row, .sheet { opacity: 1; transform: none; }
+  .file-row { opacity: 1; transform: none; }
   .fetch-beam, .job-beam, .live-beam, .file-thumb::after { display: none; }
   .fetch-slide { transform: none; }
   .fetch-slide:not(.is-current) { opacity: 0; }

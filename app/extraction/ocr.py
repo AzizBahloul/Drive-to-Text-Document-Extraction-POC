@@ -7,6 +7,7 @@ import math
 import os
 import re
 import shutil
+from itertools import pairwise
 from pathlib import Path
 
 import pytesseract
@@ -90,6 +91,32 @@ def validate_language(language: str) -> str:
     return value
 
 
+def deskew(image: Image.Image) -> Image.Image:
+    """Straighten modestly tilted text by measuring horizontal ink bands on a small copy."""
+    scale = min(1, 800 / max(image.size))
+    sample = image.resize(
+        tuple(max(1, round(n * scale)) for n in image.size), Image.Resampling.BILINEAR
+    )
+    low, high = sample.getextrema()
+    if min(sample.size) < 32 or high - low < 32:
+        return image
+    # Dark text on light paper. A white margin avoids scoring artificial rotation edges.
+    sample = ImageOps.expand(sample.point(lambda p: 255 if p < 160 else 0), border=20, fill=0)
+
+    def score(degrees: float) -> int:
+        rotated = sample.rotate(degrees, resample=Image.Resampling.BILINEAR) if degrees else sample
+        rows = rotated.resize((1, rotated.height), Image.Resampling.BOX).tobytes()
+        return sum((a - b) ** 2 for a, b in pairwise(rows))
+
+    base = score(0)
+    coarse = max(range(-6, 7, 2), key=score)
+    angle = max((coarse + d for d in (-1, -0.5, 0, 0.5, 1)), key=score)
+    peak = score(angle)
+    if abs(angle) < 0.5 or peak < max(50, base * 1.25):
+        return image
+    return image.rotate(angle, resample=Image.Resampling.BICUBIC, fillcolor=255)
+
+
 def prepare_image(image: Image.Image) -> Image.Image:
     """Normalise an image for Tesseract: orientation, grayscale, and a sensible size."""
     image = ImageOps.exif_transpose(image)
@@ -106,7 +133,7 @@ def prepare_image(image: Image.Image) -> Image.Image:
             image = image.resize(
                 (round(width * factor), round(height * factor)), Image.Resampling.LANCZOS
             )
-    return image
+    return deskew(image)
 
 
 def _call_tesseract(image: Image.Image, language: str, psm: int, timeout: float) -> str:

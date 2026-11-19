@@ -31,7 +31,7 @@ log = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class ExtractionOptions:
     ocr_language: str | None  # None when Tesseract is not installed
-    render_dpi: int = 200
+    render_dpi: int = 300
     min_chars_per_page: int = 25
     ocr_timeout_s: float = 0  # per image or per scanned page; 0 means no limit
     max_pages: int = 0  # 0 means every page
