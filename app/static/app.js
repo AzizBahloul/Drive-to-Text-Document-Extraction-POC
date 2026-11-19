@@ -200,6 +200,40 @@ async function loadCapabilities() {
     capabilities = null;
   }
   renderLanguageChips(capabilities);
+  state.privateMode = capabilities?.private_drive_mode;
+  $("connectDrive").hidden = !capabilities?.private_drive_available;
+  $("disconnectDrive").hidden = !state.privateMode;
+  if (state.privateMode) {
+    $("intro").textContent = "Extract text from documents you can read in Google Drive.";
+    $("linkLabel").textContent = "Google Drive folder link";
+    $("linkHint").textContent = state.privateMode === "files"
+      ? "Connect with folder access to scan a private folder." : "Subfolders are included.";
+  }
+  if (state.privateMode === "files") {
+    el.linkInput.disabled = el.linkSubmit.disabled = true;
+    try {
+      const folder = await api("/api/drive/selection");
+      showFiles(folder);
+      openStage("files");
+      focusHeading(el.filesTitle);
+    } catch (error) { failLink(error.message); }
+  } else if (location.hash === "#picked") {
+    failLink("Your connection expired. Connect private Drive to choose files again.");
+  }
+}
+
+$("disconnectDrive").addEventListener("click", async () => {
+  try {
+    await api("/api/drive/session", {method: "DELETE"});
+    location.replace("/");
+  } catch (error) { failLink(error.message); }
+});
+
+function showFiles(folder) {
+  state.folder = folder;
+  state.files = folder.files;
+  state.selected = new Set();
+  renderFiles();
 }
 
 /* ------------------------------------------------------------------ stage 1: link */
@@ -223,10 +257,7 @@ el.linkForm.addEventListener("submit", async (event) => {
   try {
     const folder = await scanFolder(url, (folderId, files) => show.add(folderId, files));
     if (run !== reel.run) return;
-    state.folder = folder;
-    state.files = folder.files;
-    state.selected = new Set();
-    renderFiles();
+    showFiles(folder);
   } catch (error) {
     failLink(error.message);
     return;
@@ -330,6 +361,7 @@ function reelStart(run) {
       if (!live()) return;
       found += files.length;
       if (found) el.fetchText.textContent = `Found ${plural(found, "document")} so far`;
+      if (state.privateMode) return;
       for (const file of files) {
         if (requested >= REEL_POOL) break;
         requested += 1;
@@ -416,6 +448,7 @@ function renderFiles() {
     ? `${name} holds ${plural(files.length, "document")}${scanned}${skipped}.${leftOut}${sizeNote}`
     : `${name} has no PDFs or images${scanned}${skipped}.${leftOut}`;
   // Built here from the id (Drive's alphabet only) rather than trusting a URL from the response.
+  el.folderLink.hidden = folder.source === "drive-picker";
   el.folderLink.href = /^[A-Za-z0-9_-]+$/.test(folder.folder_id)
     ? `https://drive.google.com/drive/folders/${folder.folder_id}`
     : "https://drive.google.com/";
@@ -430,7 +463,7 @@ function renderFiles() {
     checkbox.setAttribute("aria-label", `Select ${filePath(file)}`);
     checkbox.addEventListener("change", () => toggleFile(file.id, checkbox.checked));
     node.querySelector(".file-name-text").textContent = file.name;
-    loadInto(node.querySelector(".file-thumb img"), thumbUrl(file));
+    if (!state.privateMode) loadInto(node.querySelector(".file-thumb img"), thumbUrl(file));
     const where = node.querySelector(".file-folder");
     where.textContent = file.folder ? `${file.folder.replaceAll("/", " / ")} / ` : "";
     where.hidden = !file.folder;
@@ -721,7 +754,7 @@ function renderJob(job) {
   node.dataset.id = job.id;
   node.dataset.kind = job.kind;
   node.querySelector(".job-name").textContent = filePath(job);
-  loadInto(node.querySelector(".job-page-img"), thumbUrl(job));
+  if (!state.privateMode) loadInto(node.querySelector(".job-page-img"), thumbUrl(job));
   updateJobNode(node, job);
   return node;
 }
@@ -1008,6 +1041,10 @@ function updateToggleAllButton() {
 }
 
 el.restartButton.addEventListener("click", () => {
+  if (state.privateMode === "files") {
+    location.assign("/static/connect.html");
+    return;
+  }
   stopBatchStream();
   state.batch = null;
   state.jobs = new Map();
@@ -1103,7 +1140,7 @@ function liveUpdate(node, job) {
     const view = liveView(job.id);
     if (!node.classList.contains("is-live")) {
       node.classList.add("is-live");
-      setLiveImage(node, view, thumbUrl(job));
+      if (!state.privateMode) setLiveImage(node, view, thumbUrl(job));
     }
     if (!view.page) {
       const where = node.querySelector(".live-where");

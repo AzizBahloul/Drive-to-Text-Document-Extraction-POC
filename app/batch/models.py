@@ -80,6 +80,7 @@ class Batch:
     folder_name: str | None
     ocr_language: str | None  # None when Tesseract is not installed
     jobs: dict[str, FileJob]
+    owner: str | None = field(default=None, repr=False)
     created_at: datetime = field(default_factory=_now)
     finished_at: datetime | None = None
     subscribers: list[asyncio.Queue] = field(default_factory=list)

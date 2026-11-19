@@ -13,6 +13,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse, Response, StreamingResponse
 
+from app.api.drive_session import COOKIE, session
 from app.api.schemas import (
     BatchCreated,
     BatchRequest,
@@ -42,7 +43,10 @@ MAX_CACHED_LISTINGS = 100
 # Documented refusals, so the API reference at /api/docs matches what the routes return.
 FOLDER_ERRORS: dict[int | str, dict] = {
     400: {"model": ErrorResponse, "description": "Not a Google Drive folder link."},
-    403: {"model": ErrorResponse, "description": "The folder is not shared publicly."},
+    403: {
+        "model": ErrorResponse,
+        "description": "The current Drive connection cannot access the folder.",
+    },
     404: {"model": ErrorResponse, "description": "The folder does not exist."},
     500: {"model": ErrorResponse, "description": "The server's Google API key is invalid."},
     502: {"model": ErrorResponse, "description": "Google Drive could not be reached."},
@@ -95,15 +99,26 @@ def image_response(data: bytes) -> Response:
 
 
 def get_drive(request: Request) -> DriveClient:
-    return request.app.state.drive
+    current = session(request)
+    return current.drive if current else request.app.state.drive
 
 
 def get_manager(request: Request) -> BatchManager:
-    return request.app.state.batches
+    manager = request.app.state.batches
+    batch_id = request.path_params.get("batch_id")
+    if batch_id:
+        try:
+            owner = manager.get(batch_id).owner
+        except BatchNotFoundError:
+            owner = None
+        if owner and (not session(request) or owner != request.cookies.get(COOKIE)):
+            raise HTTPException(404, "Unknown batch.")
+    return manager
 
 
 def get_listings(request: Request) -> dict[str, tuple[FolderListing, str | None]]:
-    return request.app.state.listings
+    current = session(request)
+    return current.listings if current else request.app.state.listings
 
 
 Drive = Annotated[DriveClient, Depends(get_drive)]
@@ -119,9 +134,13 @@ def drive_error_response(exc: DriveError) -> JSONResponse:
 
 
 @router.get("/capabilities", response_model=CapabilitiesResponse)
-async def capabilities(drive: Drive, settings: AppSettings) -> CapabilitiesResponse:
+async def capabilities(
+    request: Request, drive: Drive, settings: AppSettings
+) -> CapabilitiesResponse:
     languages = list(ocr_engine.installed_languages())
     return CapabilitiesResponse(
+        private_drive_available=bool(settings.google_oauth_client_id),
+        private_drive_mode=current.mode if (current := session(request)) else None,
         drive_mode=drive.mode,
         ocr_available=bool(languages),
         ocr_languages=languages,
@@ -141,7 +160,7 @@ def remember_listing(listings: dict, link: DriveFolderLink, listing: FolderListi
 def folder_response(link: DriveFolderLink, listing: FolderListing) -> FolderResponse:
     return FolderResponse(
         folder_id=listing.folder_id,
-        folder_url=link.url,
+        folder_url="https://drive.google.com/" if listing.source == "drive-picker" else link.url,
         folder_name=listing.name,
         source=listing.source,
         files=[FileOut.model_validate(file.to_dict()) for file in listing.files],
@@ -151,13 +170,29 @@ def folder_response(link: DriveFolderLink, listing: FolderListing) -> FolderResp
     )
 
 
+@router.get("/drive/selection", response_model=FolderResponse)
+async def picked_files(request: Request) -> FolderResponse:
+    current = session(request)
+    if current is None or current.picked is None:
+        raise HTTPException(404, "Choose files in Google Picker first.")
+    return folder_response(DriveFolderLink(current.picked.folder_id), current.picked)
+
+
+def check_folder_access(request: Request) -> None:
+    current = session(request)
+    if current and current.mode == "files":
+        raise HTTPException(403, "Connect with private folder access to list a folder.")
+
+
 @router.post("/folders", response_model=FolderResponse, responses=FOLDER_ERRORS)
 async def resolve_folder(
+    request: Request,
     body: FolderRequest,
     drive: Drive,
     listings: Listings,
     settings: AppSettings,
 ) -> FolderResponse:
+    check_folder_access(request)
     link = parse_folder_link(body.url)
     listing = await drive.list_tree(
         link.folder_id,
@@ -175,6 +210,7 @@ async def resolve_folder(
     responses={200: {"content": {"application/x-ndjson": {}}}, **FOLDER_ERRORS},
 )
 async def scan_folder(
+    request: Request,
     body: FolderRequest,
     drive: Drive,
     listings: Listings,
@@ -189,6 +225,7 @@ async def scan_folder(
     plain JSON error with its status code. Thumbnails of the documents found so far can be
     requested while the scan goes on.
     """
+    check_folder_access(request)
     link = parse_folder_link(body.url)
     events: asyncio.Queue[dict] = asyncio.Queue()
     found: list[DriveFile] = []
@@ -253,15 +290,20 @@ async def file_thumbnail(
 ) -> Response:
     """Drive's thumbnail of a listed file, fetched by the server and re-encoded as JPEG."""
     # Only files of a folder this server listed: the route is not a proxy for any Drive id.
-    listing, resource_key = listings.get(folder_id, (None, None))
-    if listing is None or not any(file.id == file_id for file in listing.files):
+    listing, folder_key = listings.get(folder_id, (None, None))
+    file = next((file for file in listing.files if file.id == file_id), None) if listing else None
+    if not file:
         raise HTTPException(404, "List the folder first; this file is not in it.")
+    if session(request):
+        raise HTTPException(404, "A private preview is available after download.")
     cache: ThumbnailCache = request.app.state.thumbnails
     found, image = cache.get(file_id)
     if not found:
         async with cache.fetching:
             try:
-                image = reencode_thumbnail(await drive.thumbnail(file_id, resource_key))
+                image = reencode_thumbnail(
+                    await drive.thumbnail(file_id, file.resource_key or folder_key)
+                )
                 cache.put(file_id, image)
             except DriveError as exc:
                 log.info("No thumbnail for %s: %s", file_id, exc.message)
@@ -275,6 +317,8 @@ async def file_thumbnail(
 
 @router.post("/batches", response_model=BatchCreated, status_code=202, responses=BATCH_ERRORS)
 async def create_batch(
+    request: Request,
+    drive: Drive,
     body: BatchRequest,
     manager: Manager,
     listings: Listings,
@@ -304,7 +348,13 @@ async def create_batch(
     try:
         batch = manager.create(
             folder_id=listing.folder_id,
-            folder_url=f"https://drive.google.com/drive/folders/{listing.folder_id}",
+            folder_url=(
+                "https://drive.google.com/"
+                if listing.source == "drive-picker"
+                else f"https://drive.google.com/drive/folders/{listing.folder_id}"
+            ),
+            drive=drive,
+            owner=request.cookies[COOKIE] if session(request) else None,
             folder_name=listing.name,
             files=files,
             ocr_language=language,

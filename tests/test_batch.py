@@ -115,3 +115,45 @@ async def test_export_contains_text_and_summary(manager: BatchManager) -> None:
     # With include_text=True each page carries its extracted text.
     assert "text" in page
     await asyncio.sleep(0)
+
+
+async def test_four_downloads_can_start_with_one_extraction_worker() -> None:
+
+    started = asyncio.Event()
+    release = asyncio.Event()
+    active = 0
+    peak = 0
+
+    class SlowDrive:
+        async def download(self, file, destination, **kwargs):
+            nonlocal active, peak
+            active += 1
+            peak = max(peak, active)
+            if peak == 4:
+                started.set()
+            try:
+                await release.wait()
+                payload = build_text_pdf(["Test download overlap."])
+                destination.write_bytes(payload)
+                return len(payload)
+            finally:
+                active -= 1
+
+    settings = Settings(
+        max_parallel_files=1, max_parallel_downloads=4, google_api_key=None, _env_file=None
+    )
+    manager = BatchManager(SlowDrive(), settings)
+    batch = manager.create(
+        folder_id="test-folder",
+        folder_url="https://drive.google.com/drive/folders/test-folder",
+        folder_name="Test",
+        files=[drive_file(f"test-{index}.pdf", FileKind.PDF) for index in range(5)],
+        ocr_language=None,
+    )
+    try:
+        await asyncio.wait_for(started.wait(), timeout=2)
+    finally:
+        release.set()
+        await batch.task
+    assert peak == 4
+    assert batch.counts()["done"] == 5

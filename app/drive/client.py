@@ -1,8 +1,8 @@
-"""List and download the contents of a public Google Drive folder.
+"""List and download public and authorized Google Drive documents.
 
 Two strategies are implemented behind one interface:
 
-* ``ApiKeyStrategy`` uses the Drive v3 REST API with an API key (no OAuth). It is
+* ``DriveApiStrategy`` uses Drive v3 with a public API key or a user access token. It is
   accurate, paginated and returns file sizes. This is the preferred path.
 * ``PublicPageStrategy`` reads the public ``embeddedfolderview`` page that Google
   serves for any folder shared with "anyone with the link". It needs no
@@ -63,6 +63,8 @@ class DriveFile:
     size: int | None = None
     folder: str = ""  # path below the shared folder, "" for files at its top level
 
+    resource_key: str | None = None
+
     def to_dict(self) -> dict:
         return {
             "id": self.id,
@@ -120,7 +122,7 @@ async def _get_with_retry(
     """GET with a couple of retries on connection-level failures (resets, timeouts)."""
     for attempt in range(LIST_RETRIES + 1):
         try:
-            return await http.get(url, params=params, headers=headers)
+            return await http.get(url, params=params, headers=headers, follow_redirects=not headers)
         except httpx.TransportError as exc:
             if attempt == LIST_RETRIES:
                 raise DriveError("upstream", f"Could not reach Google Drive: {exc}") from exc
@@ -132,31 +134,43 @@ async def _get_with_retry(
 class ListingStrategy(Protocol):
     name: str
 
-    async def list_folder(self, folder_id: str, resource_key: str | None) -> FolderListing: ...
+    async def list_folder(
+        self, folder_id: str, resource_key: str | None, known_name: str | None = None
+    ) -> FolderListing: ...
 
     def download_url(self, file_id: str) -> str: ...
 
     def download_headers(self, resource_key: str | None, file_id: str) -> dict[str, str]: ...
 
 
-class ApiKeyStrategy:
+class DriveApiStrategy:
     name = "drive-api"
 
-    def __init__(self, http: httpx.AsyncClient, api_key: str) -> None:
+    def __init__(
+        self, http: httpx.AsyncClient, api_key: str | None, access_token: str | None = None
+    ) -> None:
         self._http = http
-        self._key = api_key
+        self._credentials = (
+            {"Authorization": f"Bearer {access_token}"}
+            if access_token
+            else {"X-Goog-Api-Key": api_key or ""}
+        )
+        if access_token:
+            self.name = "drive-oauth"
 
     def _headers(self, resource_key: str | None, folder_id: str) -> dict[str, str]:
         # The key travels in a header, never in the URL, so it cannot end up in request
         # logs, proxy logs or error messages that quote the URL.
-        headers = {"X-Goog-Api-Key": self._key}
+        headers = self._credentials.copy()
         if resource_key:
             headers["X-Goog-Drive-Resource-Keys"] = f"{folder_id}/{resource_key}"
         return headers
 
-    async def list_folder(self, folder_id: str, resource_key: str | None) -> FolderListing:
+    async def list_folder(
+        self, folder_id: str, resource_key: str | None, known_name: str | None = None
+    ) -> FolderListing:
         headers = self._headers(resource_key, folder_id)
-        folder_name = await self._folder_name(folder_id, headers)
+        folder_name = known_name or await self._folder_name(folder_id, headers)
         files: list[DriveFile] = []
         subfolders: list[Subfolder] = []
         skipped = 0
@@ -188,6 +202,7 @@ class ApiKeyStrategy:
                 if kind is None or not _FILE_ID_RE.match(entry_id):
                     skipped += 1
                     continue
+                key = entry.get("resourceKey")
                 size = entry.get("size")
                 files.append(
                     DriveFile(
@@ -195,6 +210,9 @@ class ApiKeyStrategy:
                         name=entry.get("name", entry["id"]),
                         mime_type=entry.get("mimeType") or _guess_mime(entry["name"], kind),
                         kind=kind,
+                        resource_key=key
+                        if isinstance(key, str) and _FILE_ID_RE.fullmatch(key)
+                        else None,
                         size=int(size) if size is not None else None,
                     )
                 )
@@ -224,6 +242,10 @@ class ApiKeyStrategy:
             return response.json()
         reason = _api_error_reason(response)
         log.warning("Drive API %s for folder %s: %s", response.status_code, folder_id, reason)
+        if self.name == "drive-oauth" and response.status_code in {401, 403, 404}:
+            raise DriveError(
+                "forbidden", "Drive denied access. Reconnect or choose a file you can read."
+            )
         if response.status_code == 404:
             raise DriveError(
                 "not_found",
@@ -275,7 +297,9 @@ class PublicPageStrategy:
     def __init__(self, http: httpx.AsyncClient) -> None:
         self._http = http
 
-    async def list_folder(self, folder_id: str, resource_key: str | None) -> FolderListing:
+    async def list_folder(
+        self, folder_id: str, resource_key: str | None, known_name: str | None = None
+    ) -> FolderListing:
         params = {"id": folder_id}
         if resource_key:
             params["resourcekey"] = resource_key
@@ -324,7 +348,15 @@ def parse_public_folder_page(folder_id: str, page: str, source: str) -> FolderLi
             skipped += 1
             continue
         files.append(
-            DriveFile(id=entry_id, name=name, mime_type=mime or _guess_mime(name, kind), kind=kind)
+            DriveFile(
+                id=entry_id,
+                name=name,
+                mime_type=mime or _guess_mime(name, kind),
+                kind=kind,
+                resource_key=key.group(1)
+                if (key := _ENTRY_RESOURCE_KEY_RE.search(block))
+                else None,
+            )
         )
     title_match = _FOLDER_TITLE_RE.search(page)
     folder_name = html.unescape(title_match.group(1)).strip() if title_match else None
@@ -385,11 +417,17 @@ def _extract_confirm_download_url(original_url: str, html_page: str) -> str | No
 class DriveClient:
     """Facade over the chosen listing/download strategy."""
 
-    def __init__(self, http: httpx.AsyncClient, api_key: str | None = None) -> None:
+    def __init__(
+        self,
+        http: httpx.AsyncClient,
+        api_key: str | None = None,
+        *,
+        access_token: str | None = None,
+    ) -> None:
         self._http = http
         self.strategy: ListingStrategy
-        if api_key:
-            self.strategy = ApiKeyStrategy(http, api_key)
+        if api_key or access_token:
+            self.strategy = DriveApiStrategy(http, api_key, access_token)
         else:
             self.strategy = PublicPageStrategy(http)
 
@@ -397,8 +435,39 @@ class DriveClient:
     def mode(self) -> str:
         return self.strategy.name
 
-    async def list_folder(self, folder_id: str, resource_key: str | None = None) -> FolderListing:
-        return await self.strategy.list_folder(folder_id, resource_key)
+    async def list_folder(
+        self, folder_id: str, resource_key: str | None = None, known_name: str | None = None
+    ) -> FolderListing:
+        return await self.strategy.list_folder(folder_id, resource_key, known_name)
+
+    async def file_metadata(self, file_id: str, resource_key: str | None) -> DriveFile:
+        strategy = self.strategy
+        if not isinstance(strategy, DriveApiStrategy):
+            raise DriveError("config", "Google Drive API access is required.")
+        headers = strategy.download_headers(resource_key, file_id)
+        data = await strategy._get_json(
+            f"{API_BASE}/files/{file_id}",
+            {"fields": "id,name,mimeType,size,resourceKey,trashed", "supportsAllDrives": "true"},
+            headers,
+            file_id,
+        )
+        mime = data.get("mimeType", "")
+        kind = classify(data.get("name", ""), mime)
+        if (
+            data.get("id") != file_id
+            or not kind
+            or data.get("trashed")
+            or mime.startswith("application/vnd.google-apps.")
+        ):
+            raise DriveError("invalid_link", "Choose a PDF, PNG or JPEG file.")
+        return DriveFile(
+            file_id,
+            data["name"],
+            mime,
+            kind,
+            int(data["size"]) if "size" in data else None,
+            resource_key=resource_key,
+        )
 
     async def list_tree(
         self,
@@ -435,7 +504,7 @@ class DriveClient:
 
         async def read(sub: Subfolder, path: str) -> FolderListing:
             async with limit:
-                result = await self.list_folder(sub.id, sub.resource_key)
+                result = await self.list_folder(sub.id, sub.resource_key, sub.name)
             if on_found:  # as soon as this folder is back, not when its whole level is
                 new = tuple(
                     replace(file, folder=path) for file in result.files if file.id not in announced
@@ -524,7 +593,9 @@ class DriveClient:
                 f"{max_bytes / 1_048_576:.0f} MB.",
             )
         url = self.strategy.download_url(file.id)
-        headers = self.strategy.download_headers(resource_key, file.id)
+        headers = self.strategy.download_headers(file.resource_key or resource_key, file.id)
+        if self.mode == "public-page" and file.resource_key:
+            url += f"&resourcekey={file.resource_key}"
         for attempt in range(LIST_RETRIES + 1):
             try:
                 return await self._stream_to(url, headers, destination, max_bytes, file)
@@ -544,7 +615,15 @@ class DriveClient:
         file: DriveFile,
     ) -> int:
         written = 0
-        async with self._http.stream("GET", url, headers=headers) as response:
+        async with self._http.stream(
+            "GET", url, headers=headers, follow_redirects=not headers
+        ) as response:
+            if response.is_redirect and headers:
+                location = response.headers.get("location", "")
+                target = httpx.URL(url).join(location)
+                if target.scheme == "https" and target.host.endswith(".googleusercontent.com"):
+                    return await self._stream_to(str(target), {}, destination, max_bytes, file)
+                raise DriveError("upstream", "Drive returned an unexpected download redirect.")
             if response.status_code != 200:
                 await response.aread()
                 raise DriveError(
@@ -555,7 +634,13 @@ class DriveClient:
             if content_type.startswith("text/html"):
                 html_body = (await response.aread()).decode("utf-8", errors="replace")
                 confirm_url = _extract_confirm_download_url(url, html_body)
-                if confirm_url:
+                if (
+                    confirm_url
+                    and not headers
+                    and httpx.URL(confirm_url).host
+                    in {"drive.google.com", "drive.usercontent.google.com"}
+                    and httpx.URL(confirm_url).scheme == "https"
+                ):
                     log.info(
                         "Detected Google Drive virus scan warning page; following confirmation link"
                     )
